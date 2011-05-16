@@ -1,0 +1,178 @@
+# Functions:
+
+# ? - guessed; ?? - wild guess
+
+# In g_src/enabler.h. Used for lots of stuff.
+8117480 flagarrayst::has_flag{flag}
+
+# Misc. getters
+80e49d0 world::?getMapBlock{x,y,z}
+806db90 block::?getRegionXY{*x,*y,tx,ty}
+89d53b0 world::?getMaterial{subidx,index}
+
+# Guarded by the corresponding creature flag
+88c9d00 ??computeClothingInsulation
+88c9830 ??computeClothingInsulation2
+813a840 ??computeClothingInsulation3
+
+# Handles liquid flowing, evaporating etc
+8a3fe70 world::?handleFlows
+
+8a400d0 [fetch block]
+8a400f0 [check flag 2a]
+8a40100 [check flag 2b]
+
+# Other liquid functions
+89c5740 world::?updateRndScatter{}
+80776c0 block::?setFlowLevel{x,y,level,type}
+89b9780 ?isWaterPassable{tile_type}
+89d4aa0 block::?canFlowInto{x,y}
+806b460 block::?isFloorPassable{x,y,?,?,?,?}
+
+
+# Called sometimes from handleFlows if temperature enabled
+80801f0 world::?handleBlockTemps
+
+# Creature body part temperature updates
+895d540 creature::?updateTemp{temp,flag,fct}
+8946b70 creature::?updateBodyPartTemp{temp,part,a3,a4}
+
+# Freeze after a bridge toggles; no idea what it does actually
+888a9f0 world::??pathfindingReindex
+
+# In g_src
+89b9a20 trandom{eax=max}
+
+# Walks the plant vector
+89c67b0 world::?updatePlants{}
+
+89c6800 [check upd group]
+
+# Updates the plant state
+89b6f10 plant::?update{*flag}
+
+89b6fc0 [fetch tile type & dsgn]
+
+# Parts of plant update
+89b5d90 plant::?updateTemperature{}
+89b6bb0 plant::?updateRain{}
+
+# A very big function.
+899cdf0 creature::??update{}
+
+89a4620 [inc thought age]
+
+# Misc
+8983bb0 creature::?printThoughtsPrefs{*str}
+8930ad0 creature::?addThought{type,a1,a2}
+
+
+
+# Data variables:
+
+93f77a0 $WORLD
+940b838 $buildings_vector
+9450598 $custom_workshop_vector
+93f7824 $constructions_vector
+93f2b7c $current_civ
+93f2b88 $current_race
+93f2b5c $?current_race_new
+940b18c $creatures_vector
+93f77b8 $engravings_vector
+93f06f0 $pause_state
+940b1fc $items_vector
+9451a00 $hist_events_vector
+9451a18 $hist_figures_vector
+944a488 $map_data
+944a49c $x_count_block
+944a4a0 $y_count_block
+944a4a4 $z_count_block
+944a4a8 $x_count
+944a4ac $y_count
+944a4b0 $z_count
+944a4b4 $region_x
+944a4b8 $region_y
+944a4bc $region_z
+944bab4 $world_data
+944bb10 $world_size_x
+944bb12 $world_size_y
+944c0ec $features_global_vector
+944c164 $features_local_start_ptr
+944c104 $geoblock_vector
+944c128 $ptr2_region_array
+944c1c0 $inorganics
+944c1d8 $organics_all
+944c1e4 $organics_plants
+944c1fc $organics_trees
+944c274 $creature_type_vector
+9450af4 $materials_other
+9450568 $colors_vector
+9450580 $all_colors_vector
+8c3de60 $cursor_xyz
+8c3e368 $window_dims
+8dfaa98 $window_x
+8dfaa9c $window_y
+8dfaaa0 $window_z
+958c17c $screen_tiles_pointer
+944c404 $language_vector
+944c41c $translation_vector
+940bd7c $vegetation_vector
+8c3de90 $control_mode
+8c3dea0 $game_mode
+93f0600 $current_year
+93f0610 $current_weather
+93f064c $current_tick
+
+14098 $world::buildings_vector
+58df8 $world::custom_workshop_vector
+#84 $world::constructions_vector
+139ec $world::creatures_vector
+#18 $world::engravings_vector
+13a5c $world::items_vector
+5a260 $world::vector
+5a278 $world::vector
+52ce8 $world::map_data
+52cfc $world::x_count_block
+52d00 $world::y_count_block
+52d04 $world::z_count_block
+52d08 $world::x_count
+52d0c $world::y_count
+52d10 $world::z_count
+52d14 $world::region_x
+52d18 $world::region_y
+52d1c $world::region_z
+54314 $world::world_data
+54370 $world::world_size_x
+54372 $world::world_size_y
+5494c $world::vector
+549c4 $world::start_ptr
+54964 $world::geoblock_vector
+54988 $world::ptr2_region_array
+54a20 $world::inorganics
+54a38 $world::organics_all
+54a44 $world::organics_plants
+54a5c $world::organics_trees
+54ad4 $world::creature_type_vector
+59354 $world::materials_other
+58dc8 $world::colors_vector
+58de0 $world::all_colors_vector
+54c64 $world::language_vector
+54c7c $world::translation_vector
+145dc $world::vegetation_vector
+
+959d3e0 $d_init_flags
+
+59de8 $world::rnd_scatter_mode
+59dea $world::rnd_scatter_seed
+59dec $world::rnd_scatter_clock
+59dee $world::rnd_scatter_x_arr
+59e0e $world::rnd_scatter_y_arr
+
+# [block_x][block_y] -> { z1 : short, z2 : short }
+52cf8 $world::?region_aquifer
+59e34 $world::??vec#2@59e34
+59e40 $world::??vec#2@59e40
+59e4c $world::??vec#2@59e4c
+59e58 $world::??vec#2@59e58
+52cdc $world::??block_vec@52cdc
+

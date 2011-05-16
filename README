@@ -1,0 +1,70 @@
+In order to profile the game:
+
+1) Install oprofile and graphviz from your distribution.
+
+2) Run callgraph.pl to extract some information from the executable.
+
+3) To profile, run as root:
+
+  - To start profiling:
+
+    opcontrol --no-vmlinux --start
+
+  - To delete data collected in previous runs:
+
+    opcontrol --reset
+
+  - To save the collected data:
+
+    opcontrol --dump && opreport -ld Dwarf_Fortress > logfile
+
+  - To stop profiling (doesn't reset):
+
+    opcontrol --stop
+
+  Note: This tool collects data for the whole system;
+        then opreport filters out unrelated stuff.
+
+        The general pattern is to start the game, prepare
+        by loading your level and so on, then start, reset,
+        wait for some data to be collected, save it.
+        Then maybe prepare for another test, reset, wait,
+        save - and so on. When done, stop.
+
+4) Run "sort4.pl logfile", using the data file saved above, to
+   produce human-readable output. The script creates a txt file
+   with a rating of functions and 16-bytes fragments within every
+   function, and an svg image with a guesstimated call graph.
+
+
+Some known time sinks:
+
+* flagarrayst::has_flag
+
+  This function in g_src/enabler.h is used to check all kind of
+  flags in data structures representing RAWs. For some reason it
+  is also used by the flow engine for the 'need to do something'
+  flags on every block; that's the main source of calls to this
+  function.
+
+  If its uses in the flow engine are replaced with manually
+  inlined assembly, it still remains slow due to cache misses.
+
+* world::?handleFlows
+
+  The flow engine. Mostly wastes time on checking flags.
+
+* creature::?update
+
+  A very big function, but load may concentrate in a tiny part
+  of it that increments the age of thoughts, if there are many
+  of these.
+
+* creature::?updateTemp
+
+  Updates the temperature of all body parts of a creature.
+
+* world::??pathfindingReindex
+
+  This seems to be the thing that causes the tiny freeze every
+  time a bridge is toggled. Actual purpose not investigated.
