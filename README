@@ -2,11 +2,19 @@ In order to profile the game:
 
 1) Install oprofile and graphviz from your distribution.
 
-2) Run callgraph.pl to extract some information from the executable.
+2) Run to extract some information from the executable:
+
+   ./callgraph.pl /path/to/Dwarf_Fortress
 
 3) To profile, run as root:
 
-  - To start profiling:
+  - To force low-precision timer mode, if the default
+    high-precision mode crashes your computer:
+
+    opcontrol --deinit
+    modprobe oprofile timer=1
+
+  - To start profiling (WARNING: might instantly reboot some machines):
 
     opcontrol --no-vmlinux --start
 
@@ -16,7 +24,11 @@ In order to profile the game:
 
   - To save the collected data:
 
-    opcontrol --dump && opreport -ld Dwarf_Fortress > logfile
+    opcontrol --dump && opreport -ld /path/to/Dwarf_Fortress > logfile
+
+    If it doesn't produce useful results, try running opreport
+    without any parameters to see if any data is being collected
+    at all.
 
   - To stop profiling (doesn't reset):
 
@@ -31,10 +43,18 @@ In order to profile the game:
         Then maybe prepare for another test, reset, wait,
         save - and so on. When done, stop.
 
-4) Run "sort4.pl logfile", using the data file saved above, to
+4) Run "./sort4.pl logfile", using the data file saved above, to
    produce human-readable output. The script creates a txt file
    with a rating of functions and 16-bytes fragments within every
    function, and an svg image with a guesstimated call graph.
+
+   A second argument to the script can be given to change the
+   minimal percentage a node must have to be shown on the graph
+   no matter what from the default 1.0. Smaller values lead to
+   more clutter on the graph, while larger cause more stuff to
+   be omitted.
+
+   diff.pl can be used to compare two txt files produced by sort4.
 
 
 Some known time sinks:

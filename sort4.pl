@@ -92,17 +92,25 @@ while (<IN>) {
 }
 
 my %visible;
+my $cutoff = $ARGV[1] || 1.0;
 
 for my $raddr (keys %data) {
-    $visible{$raddr}++ if ($data{$raddr}[1] >= 1.0);
+    $visible{$raddr}++ if ($data{$raddr}[1] >= $cutoff);
 }
 
 my @queue = keys %visible;
 while (@queue) {
     my $item = pop @queue;
-    my @callers = @{$calls{$item}||[]};
+    my @scallers = @{$calls{$item}||[]};
+    my @callers;
+    for my $caller (sort { ($data{$b}[0]||0) <=> ($data{$a}[0]||0) } @scallers) {
+        last if ($data{$caller}[0]||0) == 0;
+        push @callers, $caller;
+    }
+    if (@callers == 0) {
+        @callers = @scallers;
+    }
     if (@callers > 3) {
-        @callers = sort { ($data{$b}[0]||0) <=> ($data{$a}[0]||0) } @callers;
         @callers = @callers[0..2];
     }
     for my $caller (@callers) {
@@ -126,8 +134,10 @@ for my $raddr (keys %visible) {
     my $rdata = $data{$raddr};
     my $opts = '';
     my @callers = @{$calls{$raddr}||[]};
-    if (@callers > 5) {
+    for my $caller (@callers) {
+        next if $visible{$caller};
         $opts .= ' style=bold';
+        last;
     }
     if ($rdata->[1] >= 10) {
         $opts .= ' color=red';

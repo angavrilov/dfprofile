@@ -3,10 +3,12 @@
 use strict;
 use warnings;
 
+my $df_name = $ARGV[0] || 'Dwarf_Fortress';
+
 my @ranges;
 my %known;
 
-open FS, 'objdump --dwarf Dwarf_Fortress |';
+open FS, "objdump --dwarf $df_name |";
 while (<FS>) {
     next unless /pc=([0-9a-f]+)\.\.([0-9a-f]+)/;
     my $item = [hex $1, hex $2];
@@ -21,7 +23,7 @@ print STDERR scalar(@ranges), "\n";
 my %call_targets;
 my @calls;
 
-open CS, 'objdump --disassemble --demangle --no-show-raw-insn Dwarf_Fortress |';
+open CS, "objdump --disassemble --demangle --no-show-raw-insn $df_name |";
 while (<CS>) {
     next unless /^\s*([0-9a-f]+):\s+call\s+([0-9a-f]+)(?:\s*<(.+)>)?/;
     my ($pc, $tgt, $info) = (hex $1, hex $2, $3);
