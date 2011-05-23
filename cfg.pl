@@ -137,8 +137,9 @@ while (<D>) {
     $nop = 1 if $insn eq 'nop';
     $nop = 1 if $insn =~ /^lea\s+([a-z]+),\[([a-z]+)(?:\+eiz\*1)?\+0x0\]$/ && $1 eq $2;
     $nop = 1 if $insn =~ /^(?:xchg|mov)\s+([a-z]+),([a-z]+)$/ && $1 eq $2;
-    push @disass, { pc => $pc, insn => $insn, aux => $aux, nop => $nop };
-    $addr_idx{$pc} = $#disass;
+    my $entry = { idx => 1+$#disass, pc => $pc, insn => $insn, aux => $aux, nop => $nop };
+    push @disass, $entry;
+    $addr_idx{$pc} = $entry;
 }
 close D;
 
@@ -148,6 +149,8 @@ my %prev;
 open IMG, '<:raw', 'Dwarf_Fortress' or die "Can't open the executable";
 
 my $dsize = $#disass;
+
+my @switch_jmps;
 
 for my $entry (@disass) {
     my $pc = $entry->{pc};
@@ -174,28 +177,75 @@ for my $entry (@disass) {
     } elsif (/^jmp\s+dword\s+ptr\s+\[([a-z]+)\*4\+0x([0-9a-f]+)\]$/) {
         my ($reg, $base) = ($1, hex $2);
         $entry->{stop} = 1;
-        # Read the jump table from the executable
-        my $offset = $base - $img_base;
-        seek(IMG, $offset, 0) or die "Can't seek to $offset";
-        my %idxset;
-        for (my $id = 0;; $id++) {
-            my $buf;
-            read(IMG, $buf, 4) == 4 or last;
-            my $tgt = unpack 'L', $buf;
-            if ($addr_idx{$tgt}) {
-                push @{$idxset{$tgt}}, $id;
-            } else {
-                # Guess the end by invalid target address
-                last;
-            }
-        }
-        for my $tgt (keys %idxset) {
-            my $ids = join ',',compact_ranges(@{$idxset{$tgt}});
-            $next{$pc}{$tgt} = $ids;
-            $prev{$tgt}{$pc} = $ids;
-        }
+        push @switch_jmps, [ $entry, $reg, $base ];
     } elsif (/^j/) {
         print STDERR "Unrecognized jump: '$_'\n";
+    }
+}
+
+sub find_switch_range($$) {
+    my ($entry, $reg) = @_;
+    
+    my $pentry = $disass[$entry->{idx}-1];
+    
+    # Walk jumps
+    for (;;) {
+        my @injmp = %{$prev{$entry->{pc}}||{}};
+        if (@injmp >= 2 && $injmp[1] eq '') {
+            $entry = $addr_idx{$injmp[0]};
+        } elsif (@injmp >= 2 && $injmp[1] eq 'be') {
+            $pentry = $addr_idx{$injmp[0]};
+            last;
+        } elsif ($pentry->{insn} =~ /^mov\s+(\S+),(\S.*\S)$/ && $1 eq $reg) {
+            $reg = $2;
+            $entry = $pentry;
+        } elsif ($pentry->{nop}) {
+            $entry = $pentry;
+        } else {
+            last;
+        }
+        $pentry = $disass[$entry->{idx}-1];
+    }
+    
+    return undef unless $pentry->{insn} =~ /^j(a|be)\s/;
+    
+    my $centry = $disass[$pentry->{idx}-1];
+    return undef unless $centry->{insn} =~ /^cmp\s+(\S.*\S)\s*,\s*0x([0-9a-f]+)$/;
+    return undef unless $1 eq $reg;
+    return hex $2;
+}
+
+for my $rjmp (@switch_jmps) {
+    my ($entry, $reg, $base) = @$rjmp;
+    my $pc = $entry->{pc};
+    
+    my $range = find_switch_range($entry, $reg);
+    my $bound = $range;
+    unless (defined $range) {
+        printf STDERR "Could not parse range check for jmp at %08x\n", $pc;
+        $bound = 1000000;
+    }
+    
+    # Read the jump table from the executable
+    my $offset = $base - $img_base;
+    seek(IMG, $offset, 0) or die "Can't seek to $offset";
+    my %idxset;
+    for (my $id = 0; $id <= $bound; $id++) {
+        my $buf;
+        read(IMG, $buf, 4) == 4 or last;
+        my $tgt = unpack 'L', $buf;
+        if ($addr_idx{$tgt}) {
+            push @{$idxset{$tgt}}, $id;
+        } else {
+            # Guess the end by invalid target address
+            printf STDERR "Clipping jmp range at %08x by invalid target %08x (%d)\n", $pc, $tgt, $id;
+            last;
+        }
+    }
+    for my $tgt (keys %idxset) {
+        my $ids = join ',',compact_ranges(@{$idxset{$tgt}});
+        $next{$pc}{$tgt} = $ids;
+        $prev{$tgt}{$pc} = $ids;
     }
 }
 
