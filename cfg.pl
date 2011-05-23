@@ -255,6 +255,58 @@ printf O "digraph \"%s\" {\n", addr_to_name(sprintf('%x',$rstart));
 printf O "node [fontname=\"serif\" fontsize=8];\n";
 printf O "edge [fontname=\"serif\" fontsize=8];\n";
 
+my %str_cache;
+
+sub check_string($) {
+    my ($addr) = @_;
+    
+    return $str_cache{$addr} if exists $str_cache{$addr};
+    
+    my $offset = $addr - $img_base;
+    seek(IMG, $offset, 0) or return $str_cache{$addr} = undef;
+    
+    my $str = '';
+    my $bad = 0;
+    
+    for (my $cnt = 1;;$cnt++) {
+        my $buf;
+        read(IMG, $buf, 1) == 1
+            or return $str_cache{$addr} = undef;
+        last if (ord $buf == 0);
+
+        if (($cnt%40)==0) {
+            if (length($str)>200) {
+                $str .= '...';
+                last
+            }
+            $str .= "\n";
+        }
+
+        if (ord $buf < 0x20) {
+            $bad++;
+            $str .= sprintf("\\x%02x",ord($buf));
+        } else {
+            $str .= $buf;
+        }
+    }
+    
+    $str = undef if $bad > 5;
+    return $str_cache{$addr} = $str;
+}
+
+sub add_string($) {
+    my ($hex) = @_;
+    my $str = check_string(hex $hex);
+    if (defined $str && $str ne '') {
+        $str =~ s/\\/\\\\/g;
+        $str =~ s/\"/\\\"/g;
+        $str =~ s/\n/'\\l'/g;
+        return "0x$hex\\l'$str'";
+    } else {
+        return "0x$hex";
+    }
+}
+
 my $cnt = 0;
 
 for (my $i = 0; $i <= $dsize; $i++) {
@@ -287,6 +339,9 @@ for (my $i = 0; $i <= $dsize; $i++) {
     }
 
     $name = replace_code_patterns($name);
+    if ($name =~ /string/) {
+        $name =~ s/0x([0-9a-f]+)/add_string($1)/ge;
+    }
 
     $cnt++;
     printf O "n%x [label=\"%s\" shape=box%s];\n", $entry->{pc}, $name, $opts;
