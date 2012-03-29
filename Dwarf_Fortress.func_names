@@ -28,7 +28,11 @@
 89b9780 ?isWaterPassable{tile_type}
 89d4aa0 block::?canFlowInto{x,y}
 806b460 block::?isFloorPassable{x,y,?,?,?,?}
+806e020 block::??isPassable{x,y}
 
+888d530 world::?updateConnectivityPlacement{x,y,z,?}
+86a5c30 world::??canMoveBetween{x1,y1,z1,x2,y2,z2,...}
+89d7d00 world::??89d7d00{x,y,z,?,?}
 
 # Called sometimes from handleFlows if temperature enabled
 80801f0 world::?handleBlockTemps
@@ -66,11 +70,59 @@
 8983bb0 creature::?printThoughtsPrefs{*str}
 8930ad0 creature::?addThought{type,a1,a2}
 
+88c7af0 creature::?hasMiscTrait{code}
+88f3930 creature::?setMiscTrait{code,amount}
+8413bd0 creature::?mustEatDrinkSleep()
 
+# sane, right race, etc:
+88cbef0 creature::?hasRightFlagState()
+
+88f6790 creature::?computeWearLevels{levels[5]}
+
+88b8c60 unit::getCarriedItem{}
+
+8934d30 unit::?claimItem{levels[4]}
+85ebe30 item::?setOwner{unit}
+
+89289c0 unit::?checkUniform()
+
+840c1d0 ??840c1d0{unit_idx,bool}
+8909250 unit::??8909250{}
+
+# among other things, cancels Pickup Equipment on mismatch
+83dcdf0 ??updateUnitJob{unit_idx_other0}
+83ce7b0 ??autoCreateJob{unit_idx_other0,...}
+
+83cdaf0 ??getUnitJob{unit_idx_other0,job**,unk*}
+
+88b7180 checkCasteFlag{a=race,d=caste,c=flag}
+
+# suspend, cancel, or complete:
+8904b90 unit::deactivateJob{?,?,?,info*}
+
+80e3b30 new-job()
+8654d50 job::job{unk}
+80e6e00 job::~job{}
+88b8cb0 unit::setJob{job*}
+8659080 job::addItem{job,item,mode,iidx}
+
+85d8bf0 item::isFreeOrInBin{}
+85d1880 item::getXYZ{&x,&y,&z}
+
+88ec780 ??miscTraitUpdate
+
+89f2d40 world::getBurrows{ivec&,x,y,z}
+80820f0 block::getBurrows{ivec&,x,y}
+
+83d5610 j_item_filter::find{}
+83d4350 j_item_filter::matches{item*}
 
 # Data variables:
 
 93f77a0 $WORLD
+940b174 $world.units.all
+940b180 $world.units.other[0]
+940b7cc $world.units.other[124]
 940b838 $buildings_vector
 9450598 $custom_workshop_vector
 93f7824 $constructions_vector

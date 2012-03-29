@@ -78,10 +78,22 @@ sub stack_to_name($) {
     return lookup_name %stack_names, %stack_name_cache, $_[0], 4, sub { "{$_[0]}" }, "[esp+$_[0]]";
 }
 
+my %reg_names;
+my %reg_name_cache;
+
+sub reg_to_name($$) {
+    if ($_[0] eq 'esp') {
+        return stack_to_name($_[1]);
+    } else {
+        my $reg = $_[0];
+        return lookup_name %{$reg_names{$_[0]}}, %{$reg_name_cache{$_[0]}}, $_[1], 4, sub { "{$reg:$_[0]}" }, "[$reg+$_[1]]";
+    }
+}
+
 sub add_names($) {
     my ($str) = @_;
-    $str =~ s/\[esp\]/stack_to_name('0x0')/ge;
-    $str =~ s/\[esp\s*\+\s*(0x[0-9a-f]+)\]/stack_to_name($1)/ge;
+    $str =~ s/\[(e[a-z][a-z])\]/reg_to_name($1,'0x0')/ge;
+    $str =~ s/\[(e[a-z][a-z])\s*\+\s*(0x[0-9a-f]+)\]/reg_to_name($1,$2)/ge;
     $str =~ s/((?:0x)?[0-9a-f]+)/addr_to_name($1)/ge;
     return $str;
 }
@@ -121,6 +133,11 @@ $rstart or die "Could not find function\n";
 my $sname = sprintf("func-%x", $rstart);
 
 load_names %stack_names, "$sname.stack";
+
+for my $fn (glob "$sname.reg.*") {
+    $fn =~ /\.([^.]+)$/ or next;
+    load_names %{$reg_names{$1}}, $fn;
+}
 
 my $asmcmd = "objdump --disassemble -M intel-mnemonic --no-show-raw-insn --start-address=$rstart --stop-address=$rend Dwarf_Fortress |";
 #print $asmcmd, "\n";
@@ -347,13 +364,21 @@ for (my $i = 0; $i <= $dsize; $i++) {
     printf O "n%x [label=\"%s\" shape=box%s];\n", $entry->{pc}, $name, $opts;
     printf O "n%x -> n%x;\n", $entry->{pc}, $disass[$i+1]{pc}
         unless $cent->{stop} || $i >= $dsize;
-    
+
     if (my $ntbl = $next{$cent->{pc}}) {
         for my $ntgt (keys %$ntbl) {
-            if (length $ntbl->{$ntgt}) {
-                printf O "n%x -> n%x [label=\"%s\" style=bold];\n", $entry->{pc}, $ntgt, $ntbl->{$ntgt};
+            my $tgtname = sprintf('%x',$ntgt);
+
+            my $tag = $ntbl->{$ntgt};
+            if (exists $stack_names{$ntgt}) {
+                $tgtname .= 'a'.sprintf('%x',$entry->{pc});
+                printf O "n%s [label=\"<%x>\\n%s\\l\" shape=box];\n", $tgtname, $ntgt, $stack_names{$ntgt};
+            }
+
+            if (length $tag) {
+                printf O "n%x -> n%s [label=\"%s\" style=bold];\n", $entry->{pc}, $tgtname, $tag;
             } else {
-                printf O "n%x -> n%x;\n", $entry->{pc}, $ntgt;
+                printf O "n%x -> n%s;\n", $entry->{pc}, $tgtname;
             }
         }
     }
