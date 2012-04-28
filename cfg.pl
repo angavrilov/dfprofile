@@ -31,6 +31,18 @@ sub load_names(\%$) {
     }
 }
 
+sub load_csv_names(\%$) {
+    my ($rhash, $fname) = @_;
+    
+    if (open N, $fname) {
+        while (<N>) {
+            next unless /^\"[^\"]*\",\"[^\"]*\",\"0x([0-9a-fA-F]+)\",\"[^\"]*\",\"[^\"]*\",\"([^\"]+)\"/;
+            $rhash->{hex $1} = $2;
+        }
+        close N;
+    }
+}
+
 sub lookup_name(\%\%$$$$) {
     my ($rhash, $rcache, $addr, $range, $filter, $default) = @_;
     
@@ -49,6 +61,7 @@ sub lookup_name(\%\%$$$$) {
 
 my %func_names;
 load_names %func_names, 'Dwarf_Fortress.func_names';
+load_csv_names %func_names, 'globals.csv';
 
 sub simplify_name($) {
     my ($name) = @_;
