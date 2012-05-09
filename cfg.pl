@@ -5,6 +5,38 @@ use warnings;
 
 my $img_base = 0x8048000;
 
+sub find_base($$) {
+    my ($table, $addr) = @_;
+
+    my $svec = $table->{addrlist};
+    unless (defined $svec) {
+        $svec = $table->{addrlist} = [ sort { $a <=> $b } keys %$table ];
+    }
+    
+    my $min = -1;
+    my $max = $#$svec+1;
+
+    for (;;) {
+        use integer;
+        my $mid = (($min+$max)>>1);
+        last if $mid <= $min;
+        my $val = $svec->[$mid];
+        if ($val == $addr) {
+            return $val;
+        } elsif ($val < $addr) {
+            $min = $mid;
+        } else {
+            $max = $mid;
+        }
+    }
+
+    if ($min >= 0) {
+        return $svec->[$min];
+    } else {
+        return undef;
+    }
+}
+
 sub compact_ranges(@) {
     my @values = @_;
     my @items;
@@ -24,42 +56,86 @@ sub load_names(\%$) {
     
     if (open N, $fname) {
         while (<N>) {
-            next unless /^([0-9a-f]+)\s+(\S.*\S|\S)\s*$/;
-            $rhash->{hex $1} = $2;
+            next unless /^([0-9a-f]+)\s+(\S+)(?:\s+(\S+))?\s*$/;
+            my ($addr, $name, $type) = ($1,$2,$3);
+            my $aval = hex $addr;
+    
+            $rhash->{$aval}{name} = $name;
+            $rhash->{$aval}{type} = $type;
+
+            if ($type && $type =~ /^(.*)\*$/) {
+                $rhash->{$aval}{target} = $1;
+            }
         }
         close N;
     }
 }
 
-sub load_csv_names(\%$) {
-    my ($rhash, $fname) = @_;
-    
+sub load_csv_names(\%$;$) {
+    my ($ihash, $fname, $named) = @_;
+
     if (open N, $fname) {
         while (<N>) {
-            next unless /^\"[^\"]*\",\"[^\"]*\",\"0x([0-9a-fA-F]+)\",\"[^\"]*\",\"[^\"]*\",\"([^\"]+)\"/;
-            $rhash->{hex $1} = $2;
+            next unless /^\"([^\"]*)\",\"(\d+)\",\"0x([0-9a-fA-F]+)\",\"[^\"]*\",\"([^\"]*)\",\"([^\"]*)\",\"([^\"]*)\"/;
+            my ($top, $level, $addr, $type, $name, $target) = ($1,$2,$3,$4,$5,$6);
+            next if $named && $level == 0 && $top !~ /[:]anon\d+$/;
+            next if $type =~ /^(flag-bit|bitfield-type)$/;
+            my $rhash = $named ? ($ihash->{$top} ||= {}) : $ihash;
+            my $aval = hex $addr;
+            unless ($rhash->{$aval}) {
+                $type = $name if $type =~ /-type$/;
+                $rhash->{$aval}{type} = $type;
+            }
+            $rhash->{$aval}{name} = $name;
+            if ($target) {
+                #$target .= '*' if $type eq 'stl-vector';
+                $rhash->{$aval}{target} = $target;
+            }
         }
         close N;
     }
 }
 
-sub lookup_name(\%\%$$$$) {
-    my ($rhash, $rcache, $addr, $range, $filter, $default) = @_;
+my %all_types;
+
+sub lookup_name($$;$) {
+    my ($rhash, $addr, $limit) = @_;
     
-    return $rcache->{$addr} if exists $rcache->{$addr};
-    my $av = $addr;
-    $av =~ s/^0x//;
-    $av = hex $av;
-    for (my $i = 0; $i < $range; $i++) {
-        my $name = $rhash->{$av - $i};
-        next unless $name;
-        $name = &{$filter}($name) if $filter;
-        return $rcache->{$addr} = $name . ($i ? "+$i" : '');
+    my $base = find_base($rhash, $addr);
+    return undef unless defined $base;
+
+    my $delta = $addr-$base;
+    my $info = $rhash->{$base};
+    my $binfo = $info;
+    my $name = $info->{name};
+
+    while ($info->{type}) {
+        my $thash = $all_types{$info->{type}} or last;
+        my $dbase = find_base($thash, $delta);
+        last unless defined $dbase;
+        my $dinfo = $thash->{$dbase} or last;
+        $binfo = $info unless $delta == 0;
+        $delta = $delta - $dbase;
+        $info = $dinfo;
+        $name .= '.'.$info->{name};
     }
-    return $rcache->{$addr} = $default;
+
+    return undef if defined $limit && $delta >= $limit;
+    
+    return ($delta, $name, $binfo->{type}, $info->{target});
+}
+
+sub concat_delta($$) {
+    my ($name, $delta) = @_;
+    $name .= sprintf('+0x%x', $delta) if $name && $delta;
+    return $name;
 }
 
 my %func_names;
+my %ptr_types;
+
+load_csv_names %all_types, 'all.csv', 1;
+
 load_names %func_names, 'Dwarf_Fortress.func_names';
 load_csv_names %func_names, 'globals.csv';
 
@@ -74,41 +150,33 @@ sub simplify_name($) {
     return $name;
 }
 
-my %name_cache;
-
-sub addr_to_name($) {
-    return lookup_name %func_names, %name_cache, $_[0], 16, \&simplify_name, $_[0];
-}
-
 my %stack_names = (
-  0 => 'parm0', 4 => 'parm1',
-  8 => 'parm2', 12 => 'parm3',
-  16 => 'parm4', 20 => 'parm5'
+  0 => { name => 'parm0' }, 4 => { name => 'parm1' },
+  8 => { name => 'parm2' }, 12 => { name => 'parm3' },
+  16 => { name => 'parm4' }, 20 => { name => 'parm5' }
 );
-my %stack_name_cache;
 
-sub stack_to_name($) {
-    return lookup_name %stack_names, %stack_name_cache, $_[0], 4, sub { "{$_[0]}" }, "[esp+$_[0]]";
-}
+sub stack_to_name($$;$) {
+    my ($text, $addr, $entry) = @_;
 
-my %reg_names;
-my %reg_name_cache;
+    my $off = $addr ? hex($addr) : 0;
 
-sub reg_to_name($$) {
-    if ($_[0] eq 'esp') {
-        return stack_to_name($_[1]);
-    } else {
-        my $reg = $_[0];
-        return lookup_name %{$reg_names{$_[0]}}, %{$reg_name_cache{$_[0]}}, $_[1], 4, sub { "{$reg:$_[0]}" }, "[$reg+$_[1]]";
+    my ($delta, $name, $type, $ptype) = lookup_name(\%stack_names, $off, 4);
+
+    if ($name) {
+        if ($entry && $entry->{out_reg}) {
+            if ($entry->{is_lea}) {
+                $entry->{ptr_type} = $type;
+                $entry->{ptr_offset} = $delta;
+            } elsif (!$delta) {
+                $entry->{ptr_type} = $ptype;
+            }
+        }
+
+        return '{'.concat_delta($name,$delta).'}';
     }
-}
 
-sub add_names($) {
-    my ($str) = @_;
-    $str =~ s/\[(e[a-z][a-z])\]/reg_to_name($1,'0x0')/ge;
-    $str =~ s/\[(e[a-z][a-z])\s*\+\s*(0x[0-9a-f]+)\]/reg_to_name($1,$2)/ge;
-    $str =~ s/((?:0x)?[0-9a-f]+)/addr_to_name($1)/ge;
-    return $str;
+    return $text;
 }
 
 sub replace_code_patterns($) {
@@ -133,7 +201,7 @@ open F, 'Dwarf_Fortress.func_ranges' or die "Can't read funcs";
 while (<F>) {
     next unless /^([0-9a-f]+)\s+([0-9a-f]+)\s+(\S.*\S|\S)?\s*$/;
     my ($start, $end, $name) = (hex $1, hex $2, $3);
-    $func_names{$start} ||= $name;
+    $func_names{$start} ||= { name => simplify_name($name) } if $name;
     if ($addr >= $start && $addr <= $end) {
         $rstart = $start;
         $rend = $end;
@@ -141,16 +209,20 @@ while (<F>) {
 }
 close F;
 
+if ($ARGV[1]) {
+    $rstart = $addr;
+    $rend = hex $ARGV[1];
+}
+
 $rstart or die "Could not find function\n";
 
 my $sname = sprintf("func-%x", $rstart);
 
 load_names %stack_names, "$sname.stack";
 
-for my $fn (glob "$sname.reg.*") {
-    $fn =~ /\.([^.]+)$/ or next;
-    load_names %{$reg_names{$1}}, $fn;
-}
+#
+# DISASSEMBLE CODE
+#
 
 my $asmcmd = "objdump --disassemble -M intel-mnemonic --no-show-raw-insn --start-address=$rstart --stop-address=$rend Dwarf_Fortress |";
 #print $asmcmd, "\n";
@@ -167,7 +239,35 @@ while (<D>) {
     $nop = 1 if $insn eq 'nop';
     $nop = 1 if $insn =~ /^lea\s+([a-z]+),\[([a-z]+)(?:\+eiz\*1)?\+0x0\]$/ && $1 eq $2;
     $nop = 1 if $insn =~ /^(?:xchg|mov)\s+([a-z]+),([a-z]+)$/ && $1 eq $2;
-    my $entry = { idx => 1+$#disass, pc => $pc, insn => $insn, aux => $aux, nop => $nop };
+    my $entry = {
+        idx => 1+$#disass, pc => $pc, aux => $aux,
+        nop => $nop, defs => {}, live => {},
+    };
+
+    if ($insn =~ /^call\s+([0-9a-fA-F]+)$/) {
+        $entry->{out_reg} = 'eax';
+        $entry->{defs}{eax} = 1;
+        my $faddr = hex $1;
+        my ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $faddr, 1);
+        $insn = 'call '.concat_delta($name,$delta) if $name;
+        $entry->{ptr_type} = $ptype;
+    } elsif ($insn =~ /^(\S+)\s+(e[a-z][a-z]),/) {
+        my ($cmd, $reg) = ($1, $2);
+        unless ($cmd =~ /^(cmp|test)$/) {
+            $entry->{out_reg} = $reg;
+            $entry->{is_lea} = lc($cmd) eq 'lea';
+            $entry->{defs}{$reg} = 1;
+            if ($insn =~ /^mov\s+[a-z]+,(e[a-z][a-z])$/) {
+                $entry->{in_reg} = $1;
+            }
+        }
+    }
+
+    $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\]),/stack_to_name($1,$2).','/ie;
+    $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\])$/stack_to_name($1,$2,$entry)/ie;
+
+    $entry->{insn} = $insn;
+
     push @disass, $entry;
     $addr_idx{$pc} = $entry;
 }
@@ -177,6 +277,10 @@ my %next;
 my %prev;
 
 open IMG, '<:raw', 'Dwarf_Fortress' or die "Can't open the executable";
+
+#
+# BUILD STATIC CFG
+#
 
 my $dsize = $#disass;
 
@@ -212,6 +316,10 @@ for my $entry (@disass) {
         print STDERR "Unrecognized jump: '$_'\n";
     }
 }
+
+#
+# BUILD SWITCH CFG
+#
 
 sub find_switch_range($$) {
     my ($entry, $reg) = @_;
@@ -279,9 +387,188 @@ for my $rjmp (@switch_jmps) {
     }
 }
 
+#
+# BUILD REGISTER DATA FLOW
+#
+
+my @dfqueue = @disass;
+my %in_dfqueue;
+$in_dfqueue{$_->{pc}}++ for @dfqueue;
+
+while (@dfqueue) {
+    my $entry = shift @dfqueue;
+    my $pc = $entry->{pc};
+    $in_dfqueue{$pc} = 0;
+
+    my $live = $entry->{live};
+    my $change = 0;
+
+    my @ins;
+    @ins = keys %{$prev{$pc}} if $prev{$pc};
+    push @ins, $disass[$entry->{idx}-1]{pc} if $entry->{idx}>0;
+
+    for my $in (@ins) {
+        my $inlive = $addr_idx{$in}{live};
+        my $indefs = $addr_idx{$in}{defs};
+        for my $reg (keys %$inlive) {
+            next if $indefs->{$reg};
+            for my $dpc (keys %{$inlive->{$reg}}) {
+                $change++ unless $live->{$reg}{$dpc};
+                $live->{$reg}{$dpc} = 1;
+            }
+        }
+        for my $reg (keys %$indefs) {
+            $change++ unless $live->{$reg}{$in};
+            $live->{$reg}{$in} = 1;
+        }
+    }
+
+    if ($change) {
+        my @outs;
+        @outs = keys %{$next{$pc}} if $next{$pc};
+        push @outs, $disass[$entry->{idx}+1]{pc}
+            if $entry->{idx} < $dsize && !$entry->{stop};
+
+        for my $out (@outs) {
+            next if $in_dfqueue{$out};
+            $in_dfqueue{$out} = 1;
+            push @dfqueue, $addr_idx{$out};
+        }
+    }
+}
+
+#
+# DECODE POINTER DEREFERENCES
+#
+
+sub lookup_ptr_info($$) {
+    my ($entry, $reg) = @_;
+
+    return (undef, undef) unless $reg;
+
+    my $live = $entry->{live}{$reg};
+    for my $pc (keys %$live) {
+        next unless $addr_idx{$pc}{ptr_type};
+        return ($addr_idx{$pc}{ptr_type}, $addr_idx{$pc}{ptr_offset});
+    }
+
+    for my $pc (keys %$live) {
+        next unless $addr_idx{$pc}{ptr_offset};
+        return (undef, $addr_idx{$pc}{ptr_offset});
+    }
+
+    return (undef, undef);
+}
+
+sub decode_insn_addr($;$) {
+    my ($entry, $lea) = @_;
+
+    my $deref = 1;
+    my $insn = $entry->{insn};
+    my $reg;
+    my $offset = 0;
+
+    if ($insn =~ /\[(e[a-z][a-z])(?:\+([a-z]+)\*([124]))?\]/) {
+        $reg = $1;
+        my ($r2, $mul) = ($2, $3);
+        my ($rt2, $off2) = lookup_ptr_info($entry, $r2);
+        $offset += $off2 * $mul if $off2;
+    } elsif ($insn =~ /\[(e[a-z][a-z])(?:\+([a-z]+)\*([124]))?\+0x([0-9a-f]+)\]/) {
+        $reg = $1;
+        $offset = hex $4;
+        my ($r2, $mul) = ($2, $3);
+        my ($rt2, $off2) = lookup_ptr_info($entry, $r2);
+        $offset += $off2 * $mul if $off2;
+    } elsif ($insn =~ /ds:(?:0x)?([0-9a-f]+)/) {
+        $offset = hex $1;
+    } elsif ($insn =~ /,(e[a-z][a-z])$/) {
+        $deref = 0;
+        $reg = $1;
+    } elsif ($insn =~ /(?:0x|\s|,)([0-9a-f]+)(?:$|,|\s)/) {
+        $deref = 0;
+        $offset = hex $1;
+    } else {
+        return undef
+    }
+
+    $deref = 0 if $lea;
+
+    my ($delta, $name, $type, $ptype);
+
+    my $pdelta = 0;
+
+    if ($reg) {
+        if ($reg eq 'esp') {
+            ($delta, $name, $type, $ptype) = lookup_name(\%stack_names, $offset);
+        } else {
+            my ($ptr_type, $ptr_offset) = lookup_ptr_info($entry, $reg);
+
+            $ptr_offset ||= 0;
+            $offset += $ptr_offset;
+
+            if ($ptr_type) {
+                if ($ptr_type =~ /^(.*)\*$/) {
+                    $delta = 0;
+                    $pdelta = $offset;
+                    $type = $ptr_type;
+                    $ptype = $1;
+                } else {
+                    my $tinfo = $all_types{$ptr_type} or return undef;
+
+                    ($delta, $name, $type, $ptype) = lookup_name($tinfo, $offset);
+
+                    $name = $ptr_type.'.'.$name if $name;
+
+                    if ($offset == $ptr_offset || $type =~ /^(compound)$/) {
+                        $type = $ptr_type;
+                        $pdelta = $offset - $delta;
+                    }
+                }
+            } else {
+                ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $offset, 64);
+            }
+        }
+    } else {
+        ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $offset, 64);
+    }
+
+    return (undef, undef, undef, $deref ? 0 : $offset) unless defined $delta;
+
+    if ($deref) {
+        return ($name, $delta, ($delta == 0) ? $ptype : undef, 0);
+    } else {
+        return ($name, $delta, $type, $pdelta + $delta);
+    }
+}
+
+my $ptr_changed = 1;
+
+while ($ptr_changed) {
+    $ptr_changed = 0;
+
+    for my $entry (@disass) {
+        my $pc = $entry->{pc};
+        next unless $entry->{out_reg};
+        next if $entry->{ptr_type};
+        my $insn = $entry->{insn};
+        next unless $insn =~ /^(?:lea|mov)\s/;
+        my ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
+        if (defined $delta && $ptype) {
+            $entry->{ptr_type} = $ptype;
+            $ptr_changed = 1;
+        } 
+        if ($poff && ($entry->{ptr_offset}||0) != $poff) {
+            $entry->{ptr_offset} = $poff;
+            $ptr_changed = 1;
+        }
+    }
+}
+
 open O, ">$sname.dot";
 
-printf O "digraph \"%s\" {\n", addr_to_name(sprintf('%x',$rstart));
+my ($delta, $name) = lookup_name \%func_names, $rstart, 1;
+
+printf O "digraph \"%s\" {\n", ($name ? concat_delta($name,$delta) : sprintf('%x',$rstart));
 printf O "node [fontname=\"serif\" fontsize=8];\n";
 printf O "edge [fontname=\"serif\" fontsize=8];\n";
 
@@ -352,7 +639,10 @@ for (my $i = 0; $i <= $dsize; $i++) {
             $last_nop = 1;
         } else {
             $last_nop = 0;
-            $name .= add_names($cent->{insn}) . "\\l";
+            my ($pname, $delta) = decode_insn_addr($cent);
+            my $str = $cent->{insn};
+            $str .= "\\l    ; ".concat_delta($pname,$delta) if $pname;
+            $name .= $str . "\\l";
         }
         
         last if $cent->{stop};
@@ -404,3 +694,4 @@ close O;
 
 printf STDERR "Wrote $sname.dot\nRunning dot...\n";
 system "dot -Tsvg -o$sname.svg $sname.dot";
+system "firefox ./$sname.svg";
