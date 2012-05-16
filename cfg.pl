@@ -88,6 +88,7 @@ sub load_csv_names(\%$;$) {
             }
             $rhash->{$aval}{name} = $name;
             if ($target) {
+                $target =~ s/\*$// if $type eq 'vmethod';
                 #$target .= '*' if $type eq 'stl-vector';
                 $rhash->{$aval}{target} = $target;
             }
@@ -182,12 +183,12 @@ sub stack_to_name($$;$) {
 sub replace_code_patterns($) {
   my ($name) = @_;
   $name =~ s/
-    mov\s+(e[a-z]x),(e[a-z]x)\\l
-    sar\s+\1,0x1f\\l
-    shr\s+\1,0x1c\\l
-    add\s+\2,\1\\l
-    and\s+\2,0xf\\l
-    sub\s+\2,\1\\l
+                mov\s+(e[a-z]x),(e[a-z]x)\\l
+    [0-9a-f]+\s+sar\s+\1,0x1f\\l
+    [0-9a-f]+\s+shr\s+\1,0x1c\\l
+    [0-9a-f]+\s+add\s+\2,\1\\l
+    [0-9a-f]+\s+and\s+\2,0xf\\l
+    [0-9a-f]+\s+sub\s+\2,\1\\l
   /$2 <- $2 % 16; $1 = sgn $2 & 15;\\l/gx;
   return $name;
 }
@@ -244,13 +245,15 @@ while (<D>) {
         nop => $nop, defs => {}, live => {},
     };
 
-    if ($insn =~ /^call\s+([0-9a-fA-F]+)$/) {
+    if ($insn =~ /^call\s+/) {
         $entry->{out_reg} = 'eax';
         $entry->{defs}{eax} = 1;
-        my $faddr = hex $1;
-        my ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $faddr, 1);
-        $insn = 'call '.concat_delta($name,$delta) if $name;
-        $entry->{ptr_type} = $ptype;
+        if ($insn =~ /^call\s+([0-9a-fA-F]+)$/) {
+            my $faddr = hex $1;
+            my ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $faddr, 1);
+            $insn = 'call '.concat_delta($name,$delta) if $name;
+            $entry->{ptr_type} = $ptype;
+        }
     } elsif ($insn =~ /^(\S+)\s+(e[a-z][a-z]),/) {
         my ($cmd, $reg) = ($1, $2);
         unless ($cmd =~ /^(cmp|test)$/) {
@@ -262,6 +265,8 @@ while (<D>) {
             }
         }
     }
+
+    $entry->{ptr_type} = $stack_names{$pc}{target} if $stack_names{$pc};
 
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\]),/stack_to_name($1,$2).','/ie;
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\])$/stack_to_name($1,$2,$entry)/ie;
@@ -283,6 +288,8 @@ open IMG, '<:raw', 'Dwarf_Fortress' or die "Can't open the executable";
 #
 
 my $dsize = $#disass;
+
+print "Building CFG from $dsize instructions.\n";
 
 my @switch_jmps;
 
@@ -391,6 +398,8 @@ for my $rjmp (@switch_jmps) {
 # BUILD REGISTER DATA FLOW
 #
 
+print "Computing data flow.\n";
+
 my @dfqueue = @disass;
 my %in_dfqueue;
 $in_dfqueue{$_->{pc}}++ for @dfqueue;
@@ -484,7 +493,7 @@ sub decode_insn_addr($;$) {
     } elsif ($insn =~ /,(e[a-z][a-z])$/) {
         $deref = 0;
         $reg = $1;
-    } elsif ($insn =~ /(?:0x|\s|,)([0-9a-f]+)(?:$|,|\s)/) {
+    } elsif ($insn =~ /(?:0x)([0-9a-f]+)(?:$|,|\s)/) {
         $deref = 0;
         $offset = hex $1;
     } else {
@@ -541,6 +550,8 @@ sub decode_insn_addr($;$) {
     }
 }
 
+print "Computing pointers.\n";
+
 my $ptr_changed = 1;
 
 while ($ptr_changed) {
@@ -551,13 +562,14 @@ while ($ptr_changed) {
         next unless $entry->{out_reg};
         next if $entry->{ptr_type};
         my $insn = $entry->{insn};
-        next unless $insn =~ /^(?:lea|mov)\s/;
+        next unless $insn =~ /^(?:lea|mov|call)\s/;
         my ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
         if (defined $delta && $ptype) {
             $entry->{ptr_type} = $ptype;
+            $entry->{ptr_offset} = $poff;
             $ptr_changed = 1;
         } 
-        if ($poff && ($entry->{ptr_offset}||0) != $poff) {
+        if ($poff && !$entry->{ptr_offset}) {
             $entry->{ptr_offset} = $poff;
             $ptr_changed = 1;
         }
@@ -631,18 +643,21 @@ for (my $i = 0; $i <= $dsize; $i++) {
     my $name = sprintf("<%x>\\n", $entry->{pc});
     my $opts = '';
     my $last_nop = 0;
+    my $start_pc = $entry->{pc};
     
     my $cent = $entry;
     for (;;) {
+        my $apfix = sprintf("%02x   ", $cent->{pc} - $start_pc);
+
         if ($cent->{nop}) {
-            $name .= "NOP\\l" unless $last_nop;
+            $name .= $apfix."NOP\\l" unless $last_nop;
             $last_nop = 1;
         } else {
             $last_nop = 0;
             my ($pname, $delta) = decode_insn_addr($cent);
             my $str = $cent->{insn};
-            $str .= "\\l    ; ".concat_delta($pname,$delta) if $pname;
-            $name .= $str . "\\l";
+            $str .= "\\l          ; ".concat_delta($pname,$delta) if $pname;
+            $name .= $apfix.$str."\\l";
         }
         
         last if $cent->{stop};
@@ -673,7 +688,7 @@ for (my $i = 0; $i <= $dsize; $i++) {
             my $tgtname = sprintf('%x',$ntgt);
 
             my $tag = $ntbl->{$ntgt};
-            if (exists $stack_names{$ntgt}) {
+            if ($stack_names{$ntgt} && $stack_names{$ntgt}{name} ne 'retval:') {
                 $tgtname .= 'a'.sprintf('%x',$entry->{pc});
                 printf O "n%s [label=\"<%x>\\n%s\\l\" shape=box];\n", $tgtname, $ntgt, $stack_names{$ntgt};
             }
@@ -693,5 +708,5 @@ printf O "}\n";
 close O;
 
 printf STDERR "Wrote $sname.dot\nRunning dot...\n";
-system "dot -Tsvg -o$sname.svg $sname.dot";
+system "dot -Tsvg -Gcharset=latin1 -o$sname.svg $sname.dot";
 system "firefox ./$sname.svg";
