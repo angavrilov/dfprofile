@@ -713,3 +713,4 @@ close O;
 printf STDERR "Wrote $sname.dot\nRunning dot...\n";
 system "dot -Tsvg -Gcharset=latin1 -o$sname.svg $sname.dot";
 system "firefox ./$sname.svg";
+system "./run-kwrite.sh $sname.stack";
