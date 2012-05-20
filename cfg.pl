@@ -414,7 +414,10 @@ while (@dfqueue) {
 
     my @ins;
     @ins = keys %{$prev{$pc}} if $prev{$pc};
-    push @ins, $disass[$entry->{idx}-1]{pc} if $entry->{idx}>0;
+    if ($entry->{idx} > 0) {
+        my $pentry = $disass[$entry->{idx}-1];
+        push @ins, $pentry->{pc} unless $pentry->{stop};
+    }
 
     for my $in (@ins) {
         my $inlive = $addr_idx{$in}{live};
@@ -690,7 +693,7 @@ for (my $i = 0; $i <= $dsize; $i++) {
             my $tag = $ntbl->{$ntgt};
             if ($stack_names{$ntgt} && $stack_names{$ntgt}{name} ne 'retval:') {
                 $tgtname .= 'a'.sprintf('%x',$entry->{pc});
-                printf O "n%s [label=\"<%x>\\n%s\\l\" shape=box];\n", $tgtname, $ntgt, $stack_names{$ntgt};
+                printf O "n%s [label=\"<%x>\\n%s\\l\" shape=box];\n", $tgtname, $ntgt, $stack_names{$ntgt}{name};
             }
 
             if (length $tag) {
