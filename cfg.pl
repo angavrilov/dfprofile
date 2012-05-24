@@ -71,15 +71,31 @@ sub load_names(\%$) {
     }
 }
 
-sub load_csv_names(\%$;$) {
-    my ($ihash, $fname, $named) = @_;
+sub load_bitfields(\%$) {
+    my ($ihash, $fname) = @_;
 
     if (open N, $fname) {
         while (<N>) {
-            next unless /^\"([^\"]*)\",\"(\d+)\",\"0x([0-9a-fA-F]+)\",\"[^\"]*\",\"([^\"]*)\",\"([^\"]*)\",\"([^\"]*)\"/;
-            my ($top, $level, $addr, $type, $name, $target) = ($1,$2,$3,$4,$5,$6);
+            next unless /^\"([^\"]*)\",\"(\d+)\",\"0x([0-9a-fA-F]+)(?:\.(\d))?\",\"[^\"]*\",\"([^\"]*)\",\"([^\"]*)\",\"([^\"]*)\"/;
+            my ($top, $level, $addr, $bit, $type, $name, $target) = ($1,$2,$3,$4,$5,$6,$7);
+            next unless $type eq 'flag-bit';
+            my $off = hex($addr)*8 + ($bit||0);
+            $ihash->{$top}{$off} = { name => $name };
+        }
+        close N;
+    }
+}
+
+sub load_csv_names(\%$;$\%) {
+    my ($ihash, $fname, $named, $bitfields) = @_;
+
+    if (open N, $fname) {
+        while (<N>) {
+            next unless /^\"([^\"]*)\",\"(\d+)\",\"0x([0-9a-fA-F]+)(?:\.(\d))?\",\"[^\"]*\",\"([^\"]*)\",\"([^\"]*)\",\"([^\"]*)\"/;
+            my ($top, $level, $addr, $bit, $type, $name, $target) = ($1,$2,$3,$4,$5,$6,$7);
             next if $named && $level == 0 && $top !~ /[:]anon\d+$/;
             next if $type =~ /^(flag-bit|bitfield-type)$/;
+            next if $bit;
             my $rhash = $named ? ($ihash->{$top} ||= {}) : $ihash;
             my $aval = hex $addr;
             unless ($rhash->{$aval}) {
@@ -91,6 +107,8 @@ sub load_csv_names(\%$;$) {
                 $target =~ s/\*$// if $type eq 'vmethod';
                 #$target .= '*' if $type eq 'stl-vector';
                 $rhash->{$aval}{target} = $target;
+            } elsif ($bitfields && $bitfields->{$type}) {
+                $rhash->{$aval}{target} = '!BITS:'.$type;
             }
         }
         close N;
@@ -134,11 +152,13 @@ sub concat_delta($$) {
 
 my %func_names;
 my %ptr_types;
+my %bit_names;
 
-load_csv_names %all_types, 'all.csv', 1;
+load_bitfields %bit_names, 'all.csv';
+load_csv_names %all_types, 'all.csv', 1, %bit_names;
 
 load_names %func_names, 'Dwarf_Fortress.func_names';
-load_csv_names %func_names, 'globals.csv';
+load_csv_names %func_names, 'globals.csv', 0, %bit_names;
 
 sub simplify_name($) {
     my ($name) = @_;
@@ -171,6 +191,9 @@ sub stack_to_name($$;$) {
                 $entry->{ptr_offset} = $delta;
             } elsif (!$delta) {
                 $entry->{ptr_type} = $ptype;
+            } elsif ($ptype && $ptype =~ /^!BITS:/) {
+                $entry->{ptr_type} = $ptype;
+                $entry->{ptr_offset} = $delta*8;
             }
         }
 
@@ -496,6 +519,10 @@ sub decode_insn_addr($;$) {
     } elsif ($insn =~ /,(e[a-z][a-z])$/) {
         $deref = 0;
         $reg = $1;
+    } elsif ($insn =~/^(?:test|or|and)\s+([a-d])([hl]),/) {
+        $deref = 0;
+        $reg = 'e'.$1.'x';
+        $offset = ($2 eq 'h' ? 8 : 0);
     } elsif ($insn =~ /(?:0x)([0-9a-f]+)(?:$|,|\s)/) {
         $deref = 0;
         $offset = hex $1;
@@ -524,6 +551,11 @@ sub decode_insn_addr($;$) {
                     $pdelta = $offset;
                     $type = $ptr_type;
                     $ptype = $1;
+                } elsif ($ptr_type =~ /^!BITS:(.*)$/ && !$deref) {
+                    $name = $1;
+                    $delta = $offset;
+                    $type = $ptr_type;
+                    $ptype = $ptr_type;
                 } else {
                     my $tinfo = $all_types{$ptr_type} or return undef;
 
@@ -547,7 +579,11 @@ sub decode_insn_addr($;$) {
     return (undef, undef, undef, $deref ? 0 : $offset) unless defined $delta;
 
     if ($deref) {
-        return ($name, $delta, ($delta == 0) ? $ptype : undef, 0);
+        if ($ptype && $ptype =~ /^!BITS:/) {
+            return ($name, $delta, $ptype, 8*$delta);
+        } else {
+            return ($name, $delta, ($delta == 0) ? $ptype : undef, 0);
+        }
     } else {
         return ($name, $delta, $type, $pdelta + $delta);
     }
@@ -571,8 +607,7 @@ while ($ptr_changed) {
             $entry->{ptr_type} = $ptype;
             $entry->{ptr_offset} = $poff;
             $ptr_changed = 1;
-        } 
-        if ($poff && !$entry->{ptr_offset}) {
+        } elsif ($poff && !$entry->{ptr_offset}) {
             $entry->{ptr_offset} = $poff;
             $ptr_changed = 1;
         }
@@ -641,6 +676,22 @@ sub add_string($) {
 
 my $cnt = 0;
 
+sub format_bits($$$) {
+    my ($bitfield, $poff, $bitval) = @_;
+
+    my @names;
+
+    for (my $i = 0; $i < 32; $i++) {
+        my $bit = 1<<$i;
+        last if $bit > $bitval;
+        next unless ($bit & $bitval) != 0;
+        my ($delta, $name, $type, $ptype) = lookup_name($bit_names{$bitfield}, $poff+$i, 32);
+        push @names, ($name ? concat_delta($name, $delta) : 'bit'.$i);
+    }
+
+    return join(',', @names);
+}
+
 for (my $i = 0; $i <= $dsize; $i++) {
     my $entry = $disass[$i];
     my $name = sprintf("<%x>\\n", $entry->{pc});
@@ -657,9 +708,19 @@ for (my $i = 0; $i <= $dsize; $i++) {
             $last_nop = 1;
         } else {
             $last_nop = 0;
-            my ($pname, $delta) = decode_insn_addr($cent);
             my $str = $cent->{insn};
+
+            my ($pname, $delta, $ptype, $poff) = decode_insn_addr($cent);
+            ($ptype||'') =~ /^!BITS:(\S+)$/;
+            my $bitfield = $1;
+
             $str .= "\\l          ; ".concat_delta($pname,$delta) if $pname;
+            if ($bitfield && $cent->{insn} =~ /^(test|or|and)\s.*,0x([0-9a-f]+)$/) {
+                my ($cmd,$val) = ($1, hex $2);
+                $val = ~$val if $cmd eq 'and';
+                my $bits = format_bits($bitfield, $poff, $val);
+                $str .= "\\l          ; ".$bits if $bits;
+            }
             $name .= $apfix.$str."\\l";
         }
         
