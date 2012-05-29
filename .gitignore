@@ -1,7 +1,9 @@
 *~
 *.dot
 *.svg
+*.stack
 *.tar.gz
+*.csv
 log-*
 log.*
 Dwarf_Fortress*

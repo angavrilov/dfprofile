@@ -192,6 +192,4 @@ close OUT;
 
 print STDERR "Running dot...\n";
 system "dot -Tsvg -o $ARGV[0].svg $ARGV[0].dot";
-
-
-
+system "firefox ./$ARGV[0].svg";

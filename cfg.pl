@@ -98,6 +98,9 @@ sub load_csv_names(\%$;$\%) {
             next if $bit;
             my $rhash = $named ? ($ihash->{$top} ||= {}) : $ihash;
             my $aval = hex $addr;
+            if ($type eq 'df-linked-list') {
+                $type = $target; $target = '';
+            }
             unless ($rhash->{$aval}) {
                 $type = $name if $type =~ /-type$/;
                 $rhash->{$aval}{type} = $type;
@@ -523,6 +526,9 @@ sub decode_insn_addr($;$) {
         $deref = 0;
         $reg = 'e'.$1.'x';
         $offset = ($2 eq 'h' ? 8 : 0);
+    } elsif ($insn =~/^(?:test|or|and)\s+(e[a-z][a-z]),/) {
+        $deref = 0;
+        $reg = $1;
     } elsif ($insn =~ /(?:0x)([0-9a-f]+)(?:$|,|\s)/) {
         $deref = 0;
         $offset = hex $1;
