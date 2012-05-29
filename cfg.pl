@@ -98,7 +98,7 @@ sub load_csv_names(\%$;$\%) {
             next if $bit;
             my $rhash = $named ? ($ihash->{$top} ||= {}) : $ihash;
             my $aval = hex $addr;
-            if ($type eq 'df-linked-list') {
+            if ($type =~ /^(df-linked-list|static-array)$/) {
                 $type = $target; $target = '';
             }
             unless ($rhash->{$aval}) {
@@ -692,10 +692,18 @@ sub format_bits($$$) {
         last if $bit > $bitval;
         next unless ($bit & $bitval) != 0;
         my ($delta, $name, $type, $ptype) = lookup_name($bit_names{$bitfield}, $poff+$i, 32);
-        push @names, ($name ? concat_delta($name, $delta) : 'bit'.$i);
+        push @names, ($name ? concat_delta($name, $delta) : 'bit'.($poff+$i));
     }
 
     return join(',', @names);
+}
+
+sub invert_bits($) {
+    my ($val) = @_;
+    return ($val^0xff) if ($val&~0xff) == 0;
+    return ($val^0xffff) if ($val&~0xffff) == 0;
+    return ($val^0xffffffff) if ($val&~0xffffffff) == 0;
+    return ~$val;
 }
 
 for (my $i = 0; $i <= $dsize; $i++) {
@@ -723,8 +731,9 @@ for (my $i = 0; $i <= $dsize; $i++) {
             $str .= "\\l          ; ".concat_delta($pname,$delta) if $pname;
             if ($bitfield && $cent->{insn} =~ /^(test|or|and)\s.*,0x([0-9a-f]+)$/) {
                 my ($cmd,$val) = ($1, hex $2);
-                $val = ~$val if $cmd eq 'and';
                 my $bits = format_bits($bitfield, $poff, $val);
+                my $rbits = format_bits($bitfield, $poff, invert_bits($val));
+                $bits = '~'.$rbits if length($rbits) < length($bits);
                 $str .= "\\l          ; ".$bits if $bits;
             }
             $name .= $apfix.$str."\\l";
