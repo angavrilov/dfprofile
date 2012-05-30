@@ -56,10 +56,11 @@ sub load_names(\%$) {
     
     if (open N, $fname) {
         while (<N>) {
+            last if /^===/;
             next unless /^([0-9a-f]+)\s+(\S+)(?:\s+(\S+))?\s*$/;
             my ($addr, $name, $type) = ($1,$2,$3);
             my $aval = hex $addr;
-    
+
             $rhash->{$aval}{name} = $name;
             $rhash->{$aval}{type} = $type;
 
@@ -789,4 +790,5 @@ close O;
 printf STDERR "Wrote $sname.dot\nRunning dot...\n";
 system "dot -Tsvg -Gcharset=latin1 -o$sname.svg $sname.dot";
 system "firefox ./$sname.svg";
+system "./run-kwrite.sh Dwarf_Fortress.func_names";
 system "./run-kwrite.sh $sname.stack";
