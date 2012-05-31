@@ -84,6 +84,7 @@ for (my $n = 0; $n < $cnt; $n++) {
 
 close DFR;
 
+open CFR, '>', 'Dwarf_Fortress.call_list';
 for my $cinfo (@calls) {
     my ($pc, $tgt, $info) = @$cinfo;
     
@@ -93,7 +94,10 @@ for my $cinfo (@calls) {
     
     $cfunc->{-calls}{$tgt}++;
     $tfunc->{-called}++ if $cfunc->{-calls}{$tgt} == 1;
+
+    printf CFR "%x %x %x\n", $cfstart, $tgt, $pc;
 }
+close CFR;
 
 my $num_funcs = keys %funcs;
 printf STDERR "%d functions\n", $num_funcs;

@@ -90,14 +90,21 @@ close F;
 
 my %callers;
 my %callees;
+my %call_spots;
 
-open C, 'Dwarf_Fortress.call_info' or die "Can't read calls";
+open C, 'Dwarf_Fortress.call_list' or die "Can't read calls";
 while (<C>) {
-    next unless /^([0-9a-f]+)\s+([0-9a-f]+)/;
-    push @{$callers{hex $2}}, hex $1;
-    push @{$callees{hex $1}}, hex $2;
+    next unless /^([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)/;
+    push @{$call_spots{hex $1}{hex $2}}, hex $3;
 }
 close C;
+
+for my $caller (keys %call_spots) {
+    for my $callee (keys %{$call_spots{$caller}}) {
+        push @{$callers{$callee}}, $caller;
+        push @{$callees{$caller}}, $callee;
+    }
+}
 
 my %data;
 my $div2 = 0x4000;
@@ -117,7 +124,7 @@ sub get_data(\%$;$) {
 
     return $rdata->{$addr} = {
         base => $addr, tag => $tag, name => $name,
-        cnt => 0, perc => 0, cur_perc => 0, chunks => {}
+        cnt => 0, perc => 0, cur_perc => 0, min_cnt => 0, chunks => {}
     };
 }
 
@@ -142,6 +149,7 @@ while (<IN>) {
 
     $rdata->{cnt} += $cnt;
     $rdata->{perc} += $p;
+    $rdata->{min_cnt} ||= $cnt;
 
     my $rchunks = $rdata->{chunks};
     my $xaddr = $addr & ~0xF;
@@ -168,32 +176,50 @@ while (@queue) {
 
 # Propagate weight to callees
 my %parent_weight;
+my %parent_weight_actual;
 
-sub push_weight($$$) {
-    my ($rwalked, $addr, $weight) = @_;
+sub push_weight($$$$) {
+    my ($rwalked, $addr, $parent, $weight) = @_;
 
     return if $rwalked->{$addr};
     $rwalked->{$addr} = 1;
 
-    $parent_weight{$addr} += $weight;
+    $parent_weight{$addr}{$parent} += $weight;
+    return if $data{$addr};
 
     my @children;
     for my $child (@{$callees{$addr}||[]}) {
-        next if $data{$child} || !$has_callees{$child};
+        next if !$has_callees{$child} || $rwalked->{$child};
         push @children, $child;
     }
-    
+
     if (@children) {
         my $split = $weight / @children;
+        return if $split < 1e-5;
         for my $child (@children) {
-            &push_weight($child, $split);
+            &push_weight($rwalked, $child, $addr, $split);
         }
     }
 }
 
 for my $key (keys %data) {
-    my %walked;
-    push_weight(\%walked, $key, $data{$key}{cnt});
+    my $rdata = $data{$key};
+    my $rchunks = $rdata->{chunks};
+    for my $child (@{$callees{$key}||[]}) {
+        my %spots;
+        for my $spot (@{$call_spots{$key}{$child}}) {
+            $spots{$spot & ~0xF}++;
+            $spots{($spot + 5) & ~0xF}++;
+        }
+        my $cweight = 0;
+        for my $xspot (keys %spots) {
+            $cweight += $rchunks->{$xspot}{cnt} if $rchunks->{$xspot};
+        }
+        $cweight ||= $rdata->{min_cnt};
+        my %walked;
+        $parent_weight_actual{$child}{$key} += $cweight;
+        push_weight(\%walked, $child, $key, $cweight);
+    }    
 }
 
 # Propagate cumulative to callers
@@ -202,19 +228,26 @@ my %cum_path;
 sub push_cumulative($$$) {
     my ($rwalked, $addr, $weight) = @_;
 
+    return if $weight < 1e-5;
     $rwalked->{$addr} = 1;
 
     my $rdata = get_data(%data, $addr);
     $rdata->{cum_perc} += $weight;
 
-    my @callers = grep { $parent_weight{$_} && !$rwalked->{$_}; } @{$callers{$addr}||[]};
+    my $wmap = $parent_weight_actual{$addr};
+    my @callers = grep { $wmap->{$_} > 1e-3 && !$rwalked->{$_}; } @{$callers{$addr}||[]};
+
+    unless (@callers) {
+        $wmap = $parent_weight{$addr};
+        @callers = grep { $wmap->{$_} > 1e-3 && !$rwalked->{$_}; } @{$callers{$addr}||[]};
+    }
 
     my $sum = 0;
     for my $parent (@callers) {
-        $sum += $parent_weight{$parent};
+        $sum += $wmap->{$parent};
     }
     for my $parent (@callers) {
-        my $split = $weight * $parent_weight{$parent} / $sum;
+        my $split = $weight * $wmap->{$parent} / $sum;
         $cum_path{$addr}{$parent} += $split;
         push_cumulative($rwalked, $parent, $split);
     }
@@ -241,12 +274,12 @@ while (@queue) {
     my $item = pop @queue;
     my @scallers = @{$callers{$item}||[]};
     my @callers;
-    for my $caller (sort { ($data{$b}{cnt}||0) <=> ($data{$a}{cnt}||0) } @scallers) {
-        last if ($data{$caller}{cnt}||0) == 0;
+    for my $caller (sort { ($data{$b}{cum_perc}||0) <=> ($data{$a}{cum_perc}||0) } @scallers) {
+        last if ($data{$caller}{cum_perc}||0) < 1e-2;
         push @callers, $caller;
     }
     if (@callers == 0) {
-        @callers = sort { ($parent_weight{$b}||0) <=> ($parent_weight{$a}||0) } @scallers;
+        @callers = sort { ($parent_weight{$item}{$b}||0) <=> ($parent_weight{$item}{$a}||0) } @scallers;
     }
     if (@callers > 3) {
         @callers = @callers[0..2];
