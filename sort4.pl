@@ -88,12 +88,14 @@ while (<F>) {
 }
 close F;
 
-my %calls;
+my %callers;
+my %callees;
 
 open C, 'Dwarf_Fortress.call_info' or die "Can't read calls";
 while (<C>) {
     next unless /^([0-9a-f]+)\s+([0-9a-f]+)/;
-    push @{$calls{hex $2}}, hex $1;
+    push @{$callers{hex $2}}, hex $1;
+    push @{$callees{hex $1}}, hex $2;
 }
 close C;
 
@@ -115,7 +117,7 @@ sub get_data(\%$;$) {
 
     return $rdata->{$addr} = {
         base => $addr, tag => $tag, name => $name,
-        cnt => 0, perc => 0, chunks => {}
+        cnt => 0, perc => 0, cur_perc => 0, chunks => {}
     };
 }
 
@@ -148,26 +150,103 @@ while (<IN>) {
     $rchunks->{$xaddr}{perc} += $p;
 }
 
+my @queue;
+
+# Walk to callers
+my %has_callees;
+$has_callees{$_} = 1 for keys %data;
+
+@queue = keys %data;
+while (@queue) {
+    my $item = pop @queue;
+    for my $parent (@{$callers{$item}||[]}) {
+        next if $has_callees{$parent};
+        $has_callees{$parent} = 1;
+        push @queue, $parent;
+    }
+}
+
+# Propagate weight to callees
+my %parent_weight;
+
+sub push_weight($$$) {
+    my ($rwalked, $addr, $weight) = @_;
+
+    return if $rwalked->{$addr};
+    $rwalked->{$addr} = 1;
+
+    $parent_weight{$addr} += $weight;
+
+    my @children;
+    for my $child (@{$callees{$addr}||[]}) {
+        next if $data{$child} || !$has_callees{$child};
+        push @children, $child;
+    }
+    
+    if (@children) {
+        my $split = $weight / @children;
+        for my $child (@children) {
+            &push_weight($child, $split);
+        }
+    }
+}
+
+for my $key (keys %data) {
+    my %walked;
+    push_weight(\%walked, $key, $data{$key}{cnt});
+}
+
+# Propagate cumulative to callers
+my %cum_path;
+
+sub push_cumulative($$$) {
+    my ($rwalked, $addr, $weight) = @_;
+
+    $rwalked->{$addr} = 1;
+
+    my $rdata = get_data(%data, $addr);
+    $rdata->{cum_perc} += $weight;
+
+    my @callers = grep { $parent_weight{$_} && !$rwalked->{$_}; } @{$callers{$addr}||[]};
+
+    my $sum = 0;
+    for my $parent (@callers) {
+        $sum += $parent_weight{$parent};
+    }
+    for my $parent (@callers) {
+        my $split = $weight * $parent_weight{$parent} / $sum;
+        $cum_path{$addr}{$parent} += $split;
+        push_cumulative($rwalked, $parent, $split);
+    }
+
+    $rwalked->{$addr} = 0;
+}
+
+for my $key (keys %data) {
+    my %walked;
+    push_cumulative(\%walked, $key, $data{$key}{perc});
+}
+
 my %visible;
-my $cutoff = $ARGV[1] || 1.0;
 
 # Instantiate self in cutoff
+my $cutoff = $ARGV[1] || 1.0;
 for my $key (keys %data) {
-    $visible{$key} = $data{$key} if ($data{$key}{perc} >= $cutoff);
+    $visible{$key} = $data{$key} if ($data{$key}{cum_perc} >= $cutoff);
 }
 
 # Instantiate callers
-my @queue = keys %visible;
+@queue = keys %visible;
 while (@queue) {
     my $item = pop @queue;
-    my @scallers = @{$calls{$item}||[]};
+    my @scallers = @{$callers{$item}||[]};
     my @callers;
     for my $caller (sort { ($data{$b}{cnt}||0) <=> ($data{$a}{cnt}||0) } @scallers) {
         last if ($data{$caller}{cnt}||0) == 0;
         push @callers, $caller;
     }
     if (@callers == 0) {
-        @callers = @scallers;
+        @callers = sort { ($parent_weight{$b}||0) <=> ($parent_weight{$a}||0) } @scallers;
     }
     if (@callers > 3) {
         @callers = @callers[0..2];
@@ -188,11 +267,13 @@ for my $raddr (keys %data) {
         my $tgt = get_data(%globs, 'glob_class_'.$1, $1.'::*');
         $tgt->{cnt} += $rdata->{cnt};
         $tgt->{perc} += $rdata->{perc};
+        $tgt->{cum_perc} += $rdata->{cum_perc};
     }
     if ($rdata->{name} =~ /::([_0-9a-z]+)$/i) {
         my $tgt = get_data(%globs, 'glob_fun_'.$1, '*::'.$1);
         $tgt->{cnt} += $rdata->{cnt};
         $tgt->{perc} += $rdata->{perc};
+        $tgt->{cum_perc} += $rdata->{cum_perc};
     }
 }
 for my $key (keys %globs) {
@@ -212,7 +293,7 @@ printf OUT "digraph \"calls (%.1f%% shown)\" {\n", $total;
 for my $key (keys %visible) {
     my $rdata = $visible{$key};
     my $opts = '';
-    my @callers = @{$calls{$key}||[]};
+    my @callers = @{$callers{$key}||[]};
     for my $caller (@callers) {
         next if $visible{$caller};
         $opts .= ' style=bold';
@@ -223,11 +304,23 @@ for my $key (keys %visible) {
     } elsif ($rdata->{perc} >= 1) {
         $opts .= ' color=blue';
     }
-    my $cnt = ($rdata->{cnt} > 0 ? sprintf("\\n%d %.2f%%",$rdata->{cnt}, $rdata->{perc}) : '');
+    my $cnt = '';
+    if ($rdata->{cum_perc} > 0) {
+        $cnt = sprintf("\\n%d %.2f%%",$rdata->{cnt}, $rdata->{perc});
+        $cnt .= sprintf(" (%.2f%%)", $rdata->{cum_perc}) if $rdata->{cum_perc} > $rdata->{perc};
+    }
     printf OUT "x%s [label=\"%s%s\"%s];\n", $rdata->{tag}, $rdata->{name}, $cnt, $opts;
     for my $caller (@callers) {
         next unless $visible{$caller};
-        printf OUT "x%x -> x%s;\n", $caller, $rdata->{tag};
+        my $opts = '';
+        if ($cum_path{$key}{$caller} > 2) {
+            $opts .= ' style=bold';
+        } elsif ($cum_path{$key}{$caller} < 0.1) {
+            $opts .= ' style=dotted';
+        } elsif ($cum_path{$key}{$caller} < 0.5) {
+            $opts .= ' style=dashed';
+        }
+        printf OUT "x%x -> x%s%s;\n", $caller, $rdata->{tag}, ($opts ? " [$opts]" : '');
     }
 }
 
