@@ -7,4 +7,5 @@ if [ -n "$1" ]; then
 fi
 
 opcontrol --dump 1>&2
+opcontrol --stop 1>&2
 opreport -ld $DFPATH/libs/Dwarf_Fortress

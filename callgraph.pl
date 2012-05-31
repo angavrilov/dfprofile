@@ -23,6 +23,14 @@ print STDERR scalar(@ranges), "\n";
 my %call_targets;
 my @calls;
 
+if (open AVM, 'all-vmethods.txt') {
+    while (<AVM>) {
+        next unless /^\s*([0-9a-f]+)\s+(\S+)/;
+        $call_targets{hex $1} = $2;
+    }
+    close AVM;
+}
+
 open CS, "objdump --disassemble --demangle --no-show-raw-insn $df_name |";
 while (<CS>) {
     next unless /^\s*([0-9a-f]+):\s+call\s+([0-9a-f]+)(?:\s*<(.+)>)?/;
