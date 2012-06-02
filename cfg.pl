@@ -51,8 +51,8 @@ sub compact_ranges(@) {
     return @items;
 }
 
-sub load_names(\%$) {
-    my ($rhash, $fname) = @_;
+sub load_names(\%$;\%) {
+    my ($rhash, $fname, $bitfields) = @_;
     
     if (open N, $fname) {
         while (<N>) {
@@ -66,6 +66,8 @@ sub load_names(\%$) {
 
             if ($type && $type =~ /^(.*)\*$/) {
                 $rhash->{$aval}{target} = $1;
+            } elsif ($type && $bitfields && $bitfields->{$type}) {
+                $rhash->{$aval}{target} = '!BITS:'.$type;
             }
         }
         close N;
@@ -79,9 +81,12 @@ sub load_bitfields(\%$) {
         while (<N>) {
             next unless /^\"([^\"]*)\",\"(\d+)\",\"0x([0-9a-fA-F]+)(?:\.(\d))?\",\"[^\"]*\",\"([^\"]*)\",\"([^\"]*)\",\"([^\"]*)\"/;
             my ($top, $level, $addr, $bit, $type, $name, $target) = ($1,$2,$3,$4,$5,$6,$7);
-            next unless $type eq 'flag-bit';
-            my $off = hex($addr)*8 + ($bit||0);
-            $ihash->{$top}{$off} = { name => $name };
+            if ($level == 0 && $type eq 'bitfield-type') {
+                $ihash->{$top} ||= {};
+            } elsif ($level == 1 && $ihash->{$top}) {
+                my $off = hex($addr)*8 + ($bit||0);
+                $ihash->{$top}{$off} = { name => $name };
+            }
         }
         close N;
     }
@@ -96,6 +101,7 @@ sub load_csv_names(\%$;$\%) {
             my ($top, $level, $addr, $bit, $type, $name, $target) = ($1,$2,$3,$4,$5,$6,$7);
             next if $named && $level == 0 && $top !~ /[:]anon\d+$/;
             next if $type =~ /^(flag-bit|bitfield-type)$/;
+            next if $bitfields && $bitfields->{$top};
             next if $bit;
             my $rhash = $named ? ($ihash->{$top} ||= {}) : $ihash;
             my $aval = hex $addr;
@@ -161,7 +167,7 @@ my %bit_names;
 load_bitfields %bit_names, 'all.csv';
 load_csv_names %all_types, 'all.csv', 1, %bit_names;
 
-load_names %func_names, 'Dwarf_Fortress.func_names';
+load_names %func_names, 'Dwarf_Fortress.func_names', %bit_names;
 load_csv_names %func_names, 'globals.csv', 0, %bit_names;
 
 sub simplify_name($) {
@@ -272,6 +278,8 @@ while (<D>) {
         nop => $nop, defs => {}, live => {},
     };
 
+    my $explicit_target = $stack_names{$pc} ? $stack_names{$pc}{target} : undef;
+
     if ($insn =~ /^call\s+/) {
         $entry->{out_reg} = 'eax';
         $entry->{defs}{eax} = 1;
@@ -283,7 +291,7 @@ while (<D>) {
         }
     } elsif ($insn =~ /^(\S+)\s+(e[a-z][a-z]),/) {
         my ($cmd, $reg) = ($1, $2);
-        unless ($cmd =~ /^(cmp|test)$/) {
+        unless (!$explicit_target && $cmd =~ /^(cmp|test)$/) {
             $entry->{out_reg} = $reg;
             $entry->{is_lea} = lc($cmd) eq 'lea';
             $entry->{defs}{$reg} = 1;
@@ -293,7 +301,7 @@ while (<D>) {
         }
     }
 
-    $entry->{ptr_type} = $stack_names{$pc}{target} if $stack_names{$pc};
+    $entry->{ptr_type} = $explicit_target if $explicit_target;
 
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\]),/stack_to_name($1,$2).','/ie;
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\])$/stack_to_name($1,$2,$entry)/ie;
