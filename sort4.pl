@@ -128,6 +128,12 @@ sub get_data(\%$;$) {
     };
 }
 
+sub get_val(\%$$) {
+    my ($rmap, $key, $field) = @_;
+    my $hv = $rmap->{$key} or return 0;
+    return ($hv->{$field} || 0);
+}
+
 open IN, $ARGV[0] or die "Can't open $ARGV[0]";
 
 while (<IN>) {
@@ -208,8 +214,8 @@ for my $key (keys %data) {
     for my $child (@{$callees{$key}||[]}) {
         my %spots;
         for my $spot (@{$call_spots{$key}{$child}}) {
-            $spots{$spot & ~0xF}++;
-            $spots{($spot + 5) & ~0xF}++;
+            $spots{($spot - 6) & ~0xF}++;
+            $spots{($spot + 10) & ~0xF}++;
         }
         my $cweight = 0;
         for my $xspot (keys %spots) {
@@ -274,12 +280,12 @@ while (@queue) {
     my $item = pop @queue;
     my @scallers = @{$callers{$item}||[]};
     my @callers;
-    for my $caller (sort { ($data{$b}{cum_perc}||0) <=> ($data{$a}{cum_perc}||0) } @scallers) {
-        last if ($data{$caller}{cum_perc}||0) < 1e-2;
+    for my $caller (sort { get_val(%data,$b,'cum_perc') <=> get_val(%data,$a,'cum_perc') } @scallers) {
+        last if get_val(%data,$caller,'cum_perc') < 1e-2;
         push @callers, $caller;
     }
     if (@callers == 0) {
-        @callers = sort { ($parent_weight{$item}{$b}||0) <=> ($parent_weight{$item}{$a}||0) } @scallers;
+        @callers = sort { get_val(%parent_weight,$item,$b) <=> get_val(%parent_weight,$item,$a) } @scallers;
     }
     if (@callers > 3) {
         @callers = @callers[0..2];
@@ -291,19 +297,33 @@ while (@queue) {
     }
 }
 
-# Add globs for classes
+# Add globs for functions
 my %globs;
 for my $raddr (keys %data) {
     next if $visible{$raddr};
     my $rdata = $data{$raddr};
-    if ($rdata->{name} =~ /^([_0-9a-z]+)::/i) {
-        my $tgt = get_data(%globs, 'glob_class_'.$1, $1.'::*');
+    if ($rdata->{name} =~ /::([_0-9a-z]+)$/i) {
+        my $tgt = get_data(%globs, 'glob_fun_'.$1, '*::'.$1);
         $tgt->{cnt} += $rdata->{cnt};
         $tgt->{perc} += $rdata->{perc};
         $tgt->{cum_perc} += $rdata->{cum_perc};
+        push @{$tgt->{items}}, $raddr;
     }
-    if ($rdata->{name} =~ /::([_0-9a-z]+)$/i) {
-        my $tgt = get_data(%globs, 'glob_fun_'.$1, '*::'.$1);
+}
+my %glob_locked;
+for my $key (keys %globs) {
+    next unless $globs{$key}{perc} >= $cutoff;
+    $visible{$key} = $globs{$key};
+    $glob_locked{$_}++ for @{$globs{$key}{items}}
+}
+
+# Add globs for classes
+%globs = ();
+for my $raddr (keys %data) {
+    next if $visible{$raddr} || $glob_locked{$raddr};
+    my $rdata = $data{$raddr};
+    if ($rdata->{name} =~ /^([_0-9a-z]+)::/i) {
+        my $tgt = get_data(%globs, 'glob_class_'.$1, $1.'::*');
         $tgt->{cnt} += $rdata->{cnt};
         $tgt->{perc} += $rdata->{perc};
         $tgt->{cum_perc} += $rdata->{cum_perc};
@@ -325,6 +345,7 @@ printf OUT "digraph \"calls (%.1f%% shown)\" {\n", $total;
 
 for my $key (keys %visible) {
     my $rdata = $visible{$key};
+    #print "$key = ".join(',',%$rdata)."\n" unless $rdata->{tag};
     my $opts = '';
     my @callers = @{$callers{$key}||[]};
     for my $caller (@callers) {
