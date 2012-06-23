@@ -31,13 +31,21 @@ if (open AVM, 'all-vmethods.txt') {
     close AVM;
 }
 
+my @jumps;
+
 open CS, "objdump --disassemble --demangle --no-show-raw-insn $df_name |";
 while (<CS>) {
-    next unless /^\s*([0-9a-f]+):\s+call\s+([0-9a-f]+)(?:\s*<(.+)>)?/;
-    my ($pc, $tgt, $info) = (hex $1, hex $2, $3);
-    $info = undef if $info && $info =~ /\+0x/;
-    push @calls, [ $pc, $tgt, $info ];
-    $call_targets{$tgt} ||= ($info||'');
+    if (/^\s*([0-9a-f]+):\s+call\s+([0-9a-f]+)(?:\s*<(.+)>)?/) {
+        my ($pc, $tgt, $info) = (hex $1, hex $2, $3);
+        $info = undef if $info && $info =~ /\+0x/;
+        push @calls, [ $pc, $tgt, $info ];
+        $call_targets{$tgt} ||= ($info||'');
+    } elsif (/^\s*([0-9a-f]+):\s+jmp\s+([0-9a-f]+)(?:\s*<(.+)>)?/) {
+        my ($pc, $tgt, $info) = (hex $1, hex $2, $3);
+        $info = undef if $info && $info =~ /\+0x/;
+        push @jumps, [ $pc, $tgt, $info ];
+    }
+
 }
 close CS;
 
@@ -48,6 +56,10 @@ for my $addr (keys %call_targets) {
         push @ranges, $item;
         $known{$item->[0]} = $item;
     }
+}
+
+for my $rec (@jumps) {
+    push @calls, $rec if $known{$rec->[1]};
 }
 
 print STDERR scalar(@ranges), "\n";
