@@ -226,6 +226,13 @@ sub replace_code_patterns($) {
   return $name;
 }
 
+my %arg_flags;
+
+while (@ARGV && $ARGV[0] =~ /^--(.*)$/) {
+    $arg_flags{$1} = 1;
+    shift @ARGV;
+}
+
 my $addr = hex $ARGV[0] or die "Address expected";
 
 my $rstart;
@@ -738,6 +745,7 @@ for (my $i = 0; $i <= $dsize; $i++) {
             my $bitfield = $1;
 
             $str .= "\\l          ; ".concat_delta($pname,$delta) if $pname;
+            #$str .= "\\l          ; ? $ptype" if $ptype && !$pname;
             if ($bitfield && $cent->{insn} =~ /^(test|or|and)\s.*,0x([0-9a-f]+)$/) {
                 my ($cmd,$val) = ($1, hex $2);
                 my $bits = format_bits($bitfield, $poff, $val);
@@ -795,8 +803,13 @@ printf STDERR "%d basic blocks.\n", $cnt;
 printf O "}\n";
 close O;
 
+my $gopts = '';
+$gopts .= ' -Gsplines=line' if $arg_flags{line};
+$gopts .= ' -Gsplines=polyline' if $arg_flags{polyline};
+$gopts .= ' -Gsplines=ortho' if $arg_flags{ortho};
+
 printf STDERR "Wrote $sname.dot\nRunning dot...\n";
-system "dot -Tsvg -Gcharset=latin1 -o$sname.svg $sname.dot";
+system "dot -Tsvg -Gcharset=latin1 $gopts -o$sname.svg $sname.dot";
 system "firefox ./$sname.svg";
 system "./run-kwrite.sh Dwarf_Fortress.func_names";
 system "./run-kwrite.sh $sname.stack";
