@@ -446,6 +446,18 @@ my @dfqueue = @disass;
 my %in_dfqueue;
 $in_dfqueue{$_->{pc}}++ for @dfqueue;
 
+sub get_all_ins($) {
+    my ($entry) = @_;
+    my $pc = $entry->{pc};
+    my @ins;
+    @ins = keys %{$prev{$pc}} if $prev{$pc};
+    if ($entry->{idx} > 0) {
+        my $pentry = $disass[$entry->{idx}-1];
+        push @ins, $pentry->{pc} unless $pentry->{stop};
+    }
+    return @ins;
+}
+
 while (@dfqueue) {
     my $entry = shift @dfqueue;
     my $pc = $entry->{pc};
@@ -454,12 +466,7 @@ while (@dfqueue) {
     my $live = $entry->{live};
     my $change = 0;
 
-    my @ins;
-    @ins = keys %{$prev{$pc}} if $prev{$pc};
-    if ($entry->{idx} > 0) {
-        my $pentry = $disass[$entry->{idx}-1];
-        push @ins, $pentry->{pc} unless $pentry->{stop};
-    }
+    my @ins = get_all_ins($entry);
 
     for my $in (@ins) {
         my $inlive = $addr_idx{$in}{live};
@@ -623,7 +630,7 @@ while ($ptr_changed) {
         next unless $entry->{out_reg};
         next if $entry->{ptr_type};
         my $insn = $entry->{insn};
-        next unless $insn =~ /^(?:lea|mov|call)\s/;
+        next unless $insn =~ /^(?:lea|mov|call|movzx)\s/;
         my ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
         if (defined $delta && $ptype) {
             $entry->{ptr_type} = $ptype;
@@ -639,8 +646,11 @@ while ($ptr_changed) {
 open O, ">$sname.dot";
 
 my ($delta, $name) = lookup_name \%func_names, $rstart, 1;
+my $func_name = ($name ? concat_delta($name,$delta) : sprintf('%x',$rstart));
 
-printf O "digraph \"%s\" {\n", ($name ? concat_delta($name,$delta) : sprintf('%x',$rstart));
+print "Function $func_name\n";
+
+printf O "digraph \"%s\" {\n", $func_name;
 printf O "node [fontname=\"serif\" fontsize=8];\n";
 printf O "edge [fontname=\"serif\" fontsize=8];\n";
 
@@ -728,7 +738,12 @@ for (my $i = 0; $i <= $dsize; $i++) {
     my $opts = '';
     my $last_nop = 0;
     my $start_pc = $entry->{pc};
-    
+
+    if ($entry->{nop}) {
+        my @ins = get_all_ins($entry);
+        next unless @ins;
+    }
+
     my $cent = $entry;
     for (;;) {
         my $apfix = sprintf("%02x   ", $cent->{pc} - $start_pc);
@@ -803,13 +818,32 @@ printf STDERR "%d basic blocks.\n", $cnt;
 printf O "}\n";
 close O;
 
-my $gopts = '';
-$gopts .= ' -Gsplines=line' if $arg_flags{line};
-$gopts .= ' -Gsplines=polyline' if $arg_flags{polyline};
-$gopts .= ' -Gsplines=ortho' if $arg_flags{ortho};
+my @gopts = ();
+push @gopts, '-Gsplines=line' if $arg_flags{line};
+push @gopts, '-Gsplines=polyline' if $arg_flags{polyline};
+push @gopts, '-Gsplines=ortho' if $arg_flags{ortho};
+push @gopts, '-Gnslimit=0.1', '-Gmclimit=0.1' if $arg_flags{turbo};
+
 
 printf STDERR "Wrote $sname.dot\nRunning dot...\n";
-system "dot -Tsvg -Gcharset=latin1 $gopts -o$sname.svg $sname.dot";
+
+my $fail = 0;
+my $cpid = fork();
+if ($cpid == 0) {
+    exec("dot", "-Tsvg", "-Gcharset=latin1", @gopts, "-o$sname.svg.tmp", "$sname.dot");
+} else {
+    local $SIG{INT} = sub { $fail = 1; };
+    waitpid $cpid, 0;
+    $fail = 1 unless $? == 0;
+}
+
+if ($fail) {
+    -f "$sname.svg" or die "Dot failed.\n";
+    print "Opening the existing file.\n";
+} else {
+    rename "$sname.svg.tmp", "$sname.svg";
+}
+
 system "firefox ./$sname.svg";
 system "./run-kwrite.sh Dwarf_Fortress.func_names";
 system "./run-kwrite.sh $sname.stack";
