@@ -192,7 +192,7 @@ sub stack_to_name($$;$) {
 
     my $off = $addr ? hex($addr) : 0;
 
-    my ($delta, $name, $type, $ptype) = lookup_name(\%stack_names, $off, 4);
+    my ($delta, $name, $type, $ptype) = lookup_name(\%stack_names, $off, 1 + ($off % 4));
 
     if ($name) {
         if ($entry && $entry->{out_reg}) {
@@ -304,8 +304,15 @@ while (<D>) {
             $entry->{defs}{$reg} = 1;
             if ($insn =~ /^mov\s+[a-z]+,(e[a-z][a-z])$/) {
                 $entry->{in_reg} = $1;
+            } elsif ($insn =~ /^mov\s+[a-z]+,dword ptr (\[esp\+0x[0-9a-f]+\])$/) {
+                $entry->{in_reg} = $1;
             }
         }
+    } elsif ($insn =~ /^mov\s+dword ptr (\[esp\+0x[0-9a-f]+\]),(e[a-z][a-z])$/) {
+        $entry->{out_reg} = $1;
+        $entry->{defs}{$1} = 1;
+        $entry->{in_reg} = $2;
+        $entry->{is_lea} = 0;
     }
 
     $entry->{ptr_type} = $explicit_target if $explicit_target;
@@ -529,7 +536,10 @@ sub decode_insn_addr($;$) {
     my $reg;
     my $offset = 0;
 
-    if ($insn =~ /\[(e[a-z][a-z])(?:\+([a-z]+)\*([124]))?\]/) {
+    if ($insn =~ /,dword ptr (\[esp\+0x[0-9a-f]+\])/) {
+        $deref = 0;
+        $reg = $1;
+    } elsif ($insn =~ /\[(e[a-z][a-z])(?:\+([a-z]+)\*([124]))?\]/) {
         $reg = $1;
         my ($r2, $mul) = ($2, $3);
         my ($rt2, $off2) = lookup_ptr_info($entry, $r2);
@@ -631,7 +641,13 @@ while ($ptr_changed) {
         next if $entry->{ptr_type};
         my $insn = $entry->{insn};
         next unless $insn =~ /^(?:lea|mov|call|movzx)\s/;
-        my ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
+        my ($name, $delta, $ptype, $poff);
+        if ($entry->{in_reg}) {
+            $delta = 0;
+            ($ptype, $poff) = lookup_ptr_info($entry, $entry->{in_reg});
+        } else {
+            ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
+        }
         if (defined $delta && $ptype) {
             $entry->{ptr_type} = $ptype;
             $entry->{ptr_offset} = $poff;
