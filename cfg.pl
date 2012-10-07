@@ -444,64 +444,65 @@ for my $rjmp (@switch_jmps) {
 }
 
 #
+# BUILD CFG EDGES
+#
+
+for my $entry (@disass) {
+    my $pc = $entry->{pc};
+
+    my @outs;
+    @outs = keys %{$next{$pc}} if $next{$pc};
+    push @outs, $disass[$entry->{idx}+1]{pc}
+        if $entry->{idx} < $dsize && !$entry->{stop};
+
+    $entry->{all_ins} ||= [];
+    $entry->{all_outs} = \@outs;
+    $entry->{all_out_entries} = [ map { $addr_idx{$_}; } @outs ];
+
+    for my $out (@outs) {
+        push @{$addr_idx{$out}{all_ins}}, $pc;
+        push @{$addr_idx{$out}{all_in_entries}}, $entry;
+    }
+}
+
+sub get_all_ins($) {
+    return @{$_[0]{all_ins}};
+}
+
+#
 # BUILD REGISTER DATA FLOW
 #
 
-print "Computing data flow.\n";
+my @dfqueue;
 
-my @dfqueue = @disass;
-my %in_dfqueue;
-$in_dfqueue{$_->{pc}}++ for @dfqueue;
+sub propagate_data_flow {
+    my ($entry, $reg, $def) = @_;
 
-sub get_all_ins($) {
-    my ($entry) = @_;
-    my $pc = $entry->{pc};
-    my @ins;
-    @ins = keys %{$prev{$pc}} if $prev{$pc};
-    if ($entry->{idx} > 0) {
-        my $pentry = $disass[$entry->{idx}-1];
-        push @ins, $pentry->{pc} unless $pentry->{stop};
+    for my $rout (@{$entry->{all_out_entries}}) {
+        next if $rout->{live}{$reg}{$def};
+        $rout->{live}{$reg}{$def} = 1;
+        next if $rout->{defs}{$reg};
+        push @dfqueue, [ $rout, $reg, $def ];
     }
-    return @ins;
 }
 
-while (@dfqueue) {
-    my $entry = shift @dfqueue;
-    my $pc = $entry->{pc};
-    $in_dfqueue{$pc} = 0;
+my %data_flow_ready;
 
-    my $live = $entry->{live};
-    my $change = 0;
+sub build_data_flow($) {
+    my ($reg) = @_;
 
-    my @ins = get_all_ins($entry);
+    return if $data_flow_ready{$reg};
+    $data_flow_ready{$reg} = 1;
 
-    for my $in (@ins) {
-        my $inlive = $addr_idx{$in}{live};
-        my $indefs = $addr_idx{$in}{defs};
-        for my $reg (keys %$inlive) {
-            next if $indefs->{$reg};
-            for my $dpc (keys %{$inlive->{$reg}}) {
-                $change++ unless $live->{$reg}{$dpc};
-                $live->{$reg}{$dpc} = 1;
-            }
-        }
-        for my $reg (keys %$indefs) {
-            $change++ unless $live->{$reg}{$in};
-            $live->{$reg}{$in} = 1;
+    for my $entry (@disass) {
+        if ($entry->{defs}{$reg}) {
+            propagate_data_flow($entry, $reg, $entry->{pc});
         }
     }
 
-    if ($change) {
-        my @outs;
-        @outs = keys %{$next{$pc}} if $next{$pc};
-        push @outs, $disass[$entry->{idx}+1]{pc}
-            if $entry->{idx} < $dsize && !$entry->{stop};
-
-        for my $out (@outs) {
-            next if $in_dfqueue{$out};
-            $in_dfqueue{$out} = 1;
-            push @dfqueue, $addr_idx{$out};
-        }
+    while (@dfqueue) {
+        my $info = shift @dfqueue;
+        propagate_data_flow(@$info);
     }
 }
 
@@ -648,13 +649,18 @@ while ($ptr_changed) {
         } else {
             ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
         }
+        my $changed = 0;
         if (defined $delta && $ptype) {
             $entry->{ptr_type} = $ptype;
             $entry->{ptr_offset} = $poff;
-            $ptr_changed = 1;
+            $changed = 1;
         } elsif ($poff && !$entry->{ptr_offset}) {
             $entry->{ptr_offset} = $poff;
+            $changed = 1;
+        }
+        if ($changed) {
             $ptr_changed = 1;
+            build_data_flow($entry->{out_reg});
         }
     }
 }
