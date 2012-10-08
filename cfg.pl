@@ -563,6 +563,10 @@ sub decode_insn_addr($;$) {
     } elsif ($insn =~/^(?:test|or|and)\s+(e[a-z][a-z]),/) {
         $deref = 0;
         $reg = $1;
+    } elsif ($insn =~ /^add\s+(e[a-z][a-z]),0x([0-9a-f]+)$/) {
+        $deref = 0;
+        $reg = $1;
+        $offset = hex $2;
     } elsif ($insn =~ /(?:0x)([0-9a-f]+)(?:$|,|\s)/) {
         $deref = 0;
         $offset = hex $1;
@@ -575,6 +579,7 @@ sub decode_insn_addr($;$) {
     my ($delta, $name, $type, $ptype);
 
     my $pdelta = 0;
+    my $orig_offset = $offset;
 
     if ($reg) {
         if ($reg eq 'esp') {
@@ -626,7 +631,7 @@ sub decode_insn_addr($;$) {
             return ($name, $delta, ($delta == 0) ? $ptype : undef, 0);
         }
     } else {
-        $name = undef unless $delta;
+        $name = undef unless $orig_offset;
         return ($name, $delta, $type, $pdelta + $delta);
     }
 }
@@ -643,7 +648,7 @@ while ($ptr_changed) {
         next unless $entry->{out_reg};
         next if $entry->{ptr_type};
         my $insn = $entry->{insn};
-        next unless $insn =~ /^(?:lea|mov|call|movzx)\s/;
+        next unless $insn =~ /^(?:(?:lea|mov|call|movzx)\s|add\s+e[a-z][a-z],0x)/;
         my ($name, $delta, $ptype, $poff);
         if ($entry->{in_reg}) {
             $delta = 0;
