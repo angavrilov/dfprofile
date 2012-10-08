@@ -579,6 +579,7 @@ sub decode_insn_addr($;$) {
     if ($reg) {
         if ($reg eq 'esp') {
             ($delta, $name, $type, $ptype) = lookup_name(\%stack_names, $offset);
+            ($type, $ptype) = (undef, undef) if $delta;
         } else {
             my ($ptr_type, $ptr_offset) = lookup_ptr_info($entry, $reg);
 
@@ -625,6 +626,7 @@ sub decode_insn_addr($;$) {
             return ($name, $delta, ($delta == 0) ? $ptype : undef, 0);
         }
     } else {
+        $name = undef unless $delta;
         return ($name, $delta, $type, $pdelta + $delta);
     }
 }
@@ -781,7 +783,11 @@ for (my $i = 0; $i <= $dsize; $i++) {
             ($ptype||'') =~ /^!BITS:(\S+)$/;
             my $bitfield = $1;
 
-            $str .= "\\l          ; ".concat_delta($pname,$delta) if $pname;
+            if ($pname) {
+                $str .= "\\l          ; ".concat_delta($pname,$delta);
+            } elsif ($ptype) {
+                $str .= "\\l          ; --> ".concat_delta($ptype,$poff);
+            }
             #$str .= "\\l          ; ? $ptype" if $ptype && !$pname;
             if ($bitfield && $cent->{insn} =~ /^(test|or|and)\s.*,0x([0-9a-f]+)$/) {
                 my ($cmd,$val) = ($1, hex $2);
