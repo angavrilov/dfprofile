@@ -57,8 +57,8 @@ sub load_names(\%$;\%) {
     if (open N, $fname) {
         while (<N>) {
             last if /^===/;
-            next unless /^([0-9a-f]+)\s+(\S+)(?:\s+(\S+))?\s*$/;
-            my ($addr, $name, $type) = ($1,$2,$3);
+            next unless /^([0-9a-f]+)\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$/;
+            my ($addr, $name, $type, $offset) = ($1,$2,$3,$4);
             my $aval = hex $addr;
 
             $rhash->{$aval}{name} = $name;
@@ -66,6 +66,7 @@ sub load_names(\%$;\%) {
 
             if ($type && $type =~ /^(.*)\*$/) {
                 $rhash->{$aval}{target} = $1;
+                $rhash->{$aval}{target_offset} = hex $offset if $offset;
             } elsif ($type && $bitfields && $bitfields->{$type}) {
                 $rhash->{$aval}{target} = '!BITS:'.$type;
             }
@@ -151,7 +152,7 @@ sub lookup_name($$;$) {
 
     return undef if defined $limit && $delta >= $limit;
     
-    return ($delta, $name, $binfo->{type}, $info->{target});
+    return ($delta, $name, $binfo->{type}, $info->{target}, $info->{target_offset});
 }
 
 sub concat_delta($$) {
@@ -192,7 +193,7 @@ sub stack_to_name($$;$) {
 
     my $off = $addr ? hex($addr) : 0;
 
-    my ($delta, $name, $type, $ptype) = lookup_name(\%stack_names, $off, 1 + ($off % 4));
+    my ($delta, $name, $type, $ptype, $poff) = lookup_name(\%stack_names, $off, 1 + ($off % 4));
 
     if ($name) {
         if ($entry && $entry->{out_reg}) {
@@ -201,6 +202,7 @@ sub stack_to_name($$;$) {
                 $entry->{ptr_offset} = $delta;
             } elsif (!$delta) {
                 $entry->{ptr_type} = $ptype;
+                $entry->{ptr_offset} = $poff;
             } elsif ($ptype && $ptype =~ /^!BITS:/) {
                 $entry->{ptr_type} = $ptype;
                 $entry->{ptr_offset} = $delta*8;
@@ -285,7 +287,11 @@ while (<D>) {
         nop => $nop, defs => {}, live => {},
     };
 
-    my $explicit_target = $stack_names{$pc} ? $stack_names{$pc}{target} : undef;
+    my ($explicit_target,$explicit_offset);
+    if ($stack_names{$pc}) {
+        $explicit_target = $stack_names{$pc}{target};
+        $explicit_offset = $stack_names{$pc}{target_offset};
+    }
 
     if ($insn =~ /^call\s+/) {
         $entry->{out_reg} = 'eax';
@@ -315,7 +321,10 @@ while (<D>) {
         $entry->{is_lea} = 0;
     }
 
-    $entry->{ptr_type} = $explicit_target if $explicit_target;
+    if ($explicit_target) {
+        $entry->{ptr_type} = $explicit_target;
+        $entry->{ptr_offset} = $explicit_offset;
+    }
 
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\]),/stack_to_name($1,$2).','/ie;
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\])$/stack_to_name($1,$2,$entry)/ie;
