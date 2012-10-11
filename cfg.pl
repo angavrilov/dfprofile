@@ -506,6 +506,11 @@ sub build_data_flow($) {
     }
 }
 
+for my $entry (@disass) {
+    next unless $entry->{out_reg} && $entry->{ptr_type};
+    build_data_flow($entry->{out_reg});
+}
+
 #
 # DECODE POINTER DEREFERENCES
 #
