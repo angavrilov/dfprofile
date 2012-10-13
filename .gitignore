@@ -4,6 +4,8 @@
 *.stack
 *.tar.gz
 *.csv
+*.tmp
+all-vmethods.txt
 log-*
 log.*
 Dwarf_Fortress*

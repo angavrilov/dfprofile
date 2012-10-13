@@ -57,9 +57,10 @@ sub load_names(\%$;\%) {
     if (open N, $fname) {
         while (<N>) {
             last if /^===/;
-            next unless /^([0-9a-f]+)\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$/;
-            my ($addr, $name, $type, $offset) = ($1,$2,$3,$4);
+            next unless /^([0-9a-f]+)(?:\+([0-9a-f]+))?\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$/;
+            my ($addr, $addrx, $name, $type, $offset) = ($1,$2,$3,$4,$5);
             my $aval = hex $addr;
+            $aval += hex $addrx if $addrx;
 
             $rhash->{$aval}{name} = $name;
             $rhash->{$aval}{type} = $type;
@@ -891,6 +892,6 @@ if ($fail) {
     rename "$sname.svg.tmp", "$sname.svg";
 }
 
-system "firefox ./$sname.svg";
+system "run konqueror ./$sname.svg";
 system "./run-kwrite.sh Dwarf_Fortress.func_names";
 system "./run-kwrite.sh $sname.stack";
