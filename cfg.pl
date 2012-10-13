@@ -245,7 +245,7 @@ open F, 'Dwarf_Fortress.func_ranges' or die "Can't read funcs";
 while (<F>) {
     next unless /^([0-9a-f]+)\s+([0-9a-f]+)\s+(\S.*\S|\S)?\s*$/;
     my ($start, $end, $name) = (hex $1, hex $2, $3);
-    $func_names{$start} ||= { name => simplify_name($name) } if $name;
+    $func_names{$start} ||= { name => simplify_name($name), is_function => 1 } if $name;
     if ($addr >= $start && $addr <= $end) {
         $rstart = $start;
         $rend = $end;
@@ -329,6 +329,9 @@ while (<D>) {
 
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\]),/stack_to_name($1,$2).','/ie;
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\])$/stack_to_name($1,$2,$entry)/ie;
+
+    # always replace direct references to named functions
+    $insn =~ s/0x([0-9a-f]+)/$func_names{hex $1}&&$func_names{hex $1}{is_function}?$func_names{hex $1}{name}:"0x$1"/ie;
 
     $entry->{insn} = $insn;
 
