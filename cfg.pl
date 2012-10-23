@@ -183,11 +183,7 @@ sub simplify_name($) {
     return $name;
 }
 
-my %stack_names = (
-  0 => { name => 'parm0' }, 4 => { name => 'parm1' },
-  8 => { name => 'parm2' }, 12 => { name => 'parm3' },
-  16 => { name => 'parm4' }, 20 => { name => 'parm5' }
-);
+my %stack_names = ();
 
 sub stack_to_name($$;$) {
     my ($text, $addr, $entry) = @_;
@@ -263,6 +259,11 @@ $rstart or die "Could not find function\n";
 my $sname = sprintf("func-%x", $rstart);
 
 load_names %stack_names, "$sname.stack";
+
+for (my $i = 0; $i <= 5; $i++) {
+    last if $stack_names{$i*4};
+    $stack_names{$i*4} = { name => 'parm'.$i };
+}
 
 #
 # DISASSEMBLE CODE
