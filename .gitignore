@@ -5,6 +5,7 @@
 *.tar.gz
 *.csv
 *.tmp
+*.struct
 all-vmethods.txt
 log-*
 log.*

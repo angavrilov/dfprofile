@@ -63,7 +63,7 @@ sub load_names(\%$;\%) {
             $aval += hex $addrx if $addrx;
 
             $rhash->{$aval}{name} = $name;
-            $rhash->{$aval}{type} = $type;
+            $rhash->{$aval}{type} ||= ($type || '');
 
             if ($type && $type =~ /^(.*)\*$/) {
                 $rhash->{$aval}{target} = $1;
@@ -168,6 +168,15 @@ my %bit_names;
 
 load_bitfields %bit_names, 'all.csv';
 load_csv_names %all_types, 'all.csv', 1, %bit_names;
+
+for my $name (glob "custom.*.struct") {
+    $name =~ /^custom\.(.+)\.struct$/ or next;
+    my $top = $1;
+
+    my $rhash = ($all_types{$top} ||= {});
+    load_names %$rhash, $name, %bit_names;
+    $rhash->{0} ||=  { name => $top, type => 'compound' };
+}
 
 load_names %func_names, 'Dwarf_Fortress.func_names', %bit_names;
 load_csv_names %func_names, 'globals.csv', 0, %bit_names;
