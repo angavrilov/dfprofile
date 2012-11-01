@@ -51,8 +51,8 @@ sub compact_ranges(@) {
     return @items;
 }
 
-sub load_names(\%$;\%) {
-    my ($rhash, $fname, $bitfields) = @_;
+sub load_names(\%$;\%\%) {
+    my ($rhash, $fname, $bitfields, $enums) = @_;
     
     if (open N, $fname) {
         while (<N>) {
@@ -70,6 +70,8 @@ sub load_names(\%$;\%) {
                 $rhash->{$aval}{target_offset} = hex $offset if $offset;
             } elsif ($type && $bitfields && $bitfields->{$type}) {
                 $rhash->{$aval}{target} = '!BITS:'.$type;
+            } elsif ($type && $enums && $enums->{$type}) {
+                $rhash->{$aval}{target} = '!ENUM:'.$type;
             }
         }
         close N;
@@ -94,8 +96,25 @@ sub load_bitfields(\%$) {
     }
 }
 
-sub load_csv_names(\%$;$\%) {
-    my ($ihash, $fname, $named, $bitfields) = @_;
+sub load_enums(\%$) {
+    my ($ihash, $fname) = @_;
+
+    if (open N, $fname) {
+        while (<N>) {
+            next unless /^\"([^\"]*)\",\"(\d+)\",\"[^\"]*\",\"[^\"]*\",\"([^\"]*)\",\"([^\"]*)\",\"([^\"]*)\"/;
+            my ($top, $level, $type, $name, $target) = ($1,$2,$3,$4,$5);
+            if ($level == 0 && $type eq 'enum-type') {
+                $ihash->{$top} ||= {};
+            } elsif ($level == 1 && $ihash->{$top} && $target) {
+                $ihash->{$top}{$target} = { name => $name };
+            }
+        }
+        close N;
+    }
+}
+
+sub load_csv_names(\%$;$\%\%) {
+    my ($ihash, $fname, $named, $bitfields, $enums) = @_;
 
     if (open N, $fname) {
         while (<N>) {
@@ -116,11 +135,20 @@ sub load_csv_names(\%$;$\%) {
             }
             $rhash->{$aval}{name} = $name;
             if ($target) {
-                $target =~ s/\*$// if $type eq 'vmethod';
-                #$target .= '*' if $type eq 'stl-vector';
-                $rhash->{$aval}{target} = $target;
+                if ($type eq 'vmethod') {
+                    if ($target =~ m/^(.*)\*$/) {
+                        $rhash->{$aval}{target} = $1;
+                    } elsif ($enums && $enums->{$target}) {
+                        $rhash->{$aval}{target} = '!ENUM:'.$target;
+                    }
+                } else {
+                    #$target .= '*' if $type eq 'stl-vector';
+                    $rhash->{$aval}{target} = $target;
+                }
             } elsif ($bitfields && $bitfields->{$type}) {
                 $rhash->{$aval}{target} = '!BITS:'.$type;
+            } elsif ($enums && $enums->{$type}) {
+                $rhash->{$aval}{target} = '!ENUM:'.$type;
             }
         }
         close N;
@@ -158,16 +186,24 @@ sub lookup_name($$;$) {
 
 sub concat_delta($$) {
     my ($name, $delta) = @_;
-    $name .= sprintf('+0x%x', $delta) if $name && $delta;
+    if ($name && $delta) {
+        if ($delta > 0) {
+            $name .= sprintf('+0x%x', $delta);
+        } else {
+            $name .= sprintf('-0x%x', -$delta);
+        }
+    }
     return $name;
 }
 
 my %func_names;
 my %ptr_types;
 my %bit_names;
+my %enum_names;
 
 load_bitfields %bit_names, 'all.csv';
-load_csv_names %all_types, 'all.csv', 1, %bit_names;
+load_enums %enum_names, 'all.csv';
+load_csv_names %all_types, 'all.csv', 1, %bit_names, %enum_names;
 
 for my $name (glob "custom.*.struct") {
     $name =~ /^custom\.(.+)\.struct$/ or next;
@@ -178,8 +214,8 @@ for my $name (glob "custom.*.struct") {
     $rhash->{0} ||=  { name => $top, type => 'compound' };
 }
 
-load_names %func_names, 'Dwarf_Fortress.func_names', %bit_names;
-load_csv_names %func_names, 'globals.csv', 0, %bit_names;
+load_names %func_names, 'Dwarf_Fortress.func_names', %bit_names, %enum_names;
+load_csv_names %func_names, 'globals.csv', 0, %bit_names, %enum_names;
 
 sub simplify_name($) {
     my ($name) = @_;
@@ -267,7 +303,7 @@ $rstart or die "Could not find function\n";
 
 my $sname = sprintf("func-%x", $rstart);
 
-load_names %stack_names, "$sname.stack";
+load_names %stack_names, "$sname.stack", %bit_names, %enum_names;
 
 for (my $i = 0; $i <= 5; $i++) {
     last if $stack_names{$i*4};
@@ -329,6 +365,11 @@ while (<D>) {
         $entry->{out_reg} = $1;
         $entry->{defs}{$1} = 1;
         $entry->{in_reg} = $2;
+        $entry->{is_lea} = 0;
+    } elsif ($insn =~ /^mov\s+dword ptr (\[esp\+0x[0-9a-f]+\]),0x([0-9a-f]+)$/) {
+        $entry->{out_reg} = $1;
+        $entry->{defs}{$1} = 1;
+        $entry->{in_addr} = hex $2;
         $entry->{is_lea} = 0;
     }
 
@@ -557,8 +598,8 @@ sub lookup_ptr_info($$) {
     return (undef, undef);
 }
 
-sub decode_insn_addr($;$) {
-    my ($entry, $lea) = @_;
+sub decode_insn_addr($;$$) {
+    my ($entry, $lea, $input) = @_;
 
     my $deref = 1;
     my $insn = $entry->{insn};
@@ -573,9 +614,10 @@ sub decode_insn_addr($;$) {
         my ($r2, $mul) = ($2, $3);
         my ($rt2, $off2) = lookup_ptr_info($entry, $r2);
         $offset += $off2 * $mul if $off2;
-    } elsif ($insn =~ /\[(e[a-z][a-z])(?:\+([a-z]+)\*([124]))?\+0x([0-9a-f]+)\]/) {
+    } elsif ($insn =~ /\[(e[a-z][a-z])(?:\+([a-z]+)\*([124]))?([+-])0x([0-9a-f]+)\]/) {
         $reg = $1;
-        $offset = hex $4;
+        $offset = hex $5;
+        $offset = -$offset if $4 eq '-';
         my ($r2, $mul) = ($2, $3);
         my ($rt2, $off2) = lookup_ptr_info($entry, $r2);
         $offset += $off2 * $mul if $off2;
@@ -584,17 +626,21 @@ sub decode_insn_addr($;$) {
     } elsif ($insn =~ /,(e[a-z][a-z])$/) {
         $deref = 0;
         $reg = $1;
-    } elsif ($insn =~/^(?:test|or|and)\s+([a-d])([hl]),/) {
+    } elsif ($insn =~/^(?:test|or|and|cmp)\s+([a-d])([hlx]),/) {
         $deref = 0;
         $reg = 'e'.$1.'x';
         $offset = ($2 eq 'h' ? 8 : 0);
-    } elsif ($insn =~/^(?:test|or|and)\s+(e[a-z][a-z]),/) {
+    } elsif ($insn =~/^mov[sz]x\s.*,([a-d])([hlx])/) {
+        $deref = 0;
+        $reg = 'e'.$1.'x';
+        $offset = ($2 eq 'h' ? 8 : 0);
+    } elsif ($insn =~/^(?:test|or|and|cmp)\s+(e[a-z][a-z]),/) {
         $deref = 0;
         $reg = $1;
-    } elsif ($insn =~ /^add\s+(e[a-z][a-z]),0x([0-9a-f]+)$/) {
+    } elsif ($insn =~ /^(add|sub)\s+(e[a-z][a-z]),0x([0-9a-f]+)$/) {
         $deref = 0;
-        $reg = $1;
-        $offset = hex $2;
+        $reg = $2;
+        $offset = ($1 eq 'sub' ? -hex($3) : hex($3));
     } elsif ($insn =~ /(?:0x)([0-9a-f]+)(?:$|,|\s)/) {
         $deref = 0;
         $offset = hex $1;
@@ -625,6 +671,11 @@ sub decode_insn_addr($;$) {
                     $pdelta = $offset;
                     $type = $ptr_type;
                     $ptype = $1;
+                } elsif ($ptr_type =~ /^!ENUM:(.*)$/ && !$deref) {
+                    $name = $1;
+                    $delta = $offset;
+                    $type = $ptr_type;
+                    $ptype = $ptr_type;
                 } elsif ($ptr_type =~ /^!BITS:(.*)$/ && !$deref) {
                     $name = $1;
                     $delta = $offset;
@@ -676,13 +727,17 @@ while ($ptr_changed) {
         next unless $entry->{out_reg};
         next if $entry->{ptr_type};
         my $insn = $entry->{insn};
-        next unless $insn =~ /^(?:(?:lea|mov|call|movzx)\s|add\s+e[a-z][a-z],0x)/;
+        next unless $insn =~ /^(?:(lea|mov|call|movzx|movsx)\s|add\s+e[a-z][a-z],0x)/;
+        my $opcode = $1;
         my ($name, $delta, $ptype, $poff);
         if ($entry->{in_reg}) {
             $delta = 0;
             ($ptype, $poff) = lookup_ptr_info($entry, $entry->{in_reg});
+        } elsif (defined $entry->{in_addr}) {
+            ($name, $delta, $ptype, $poff) = lookup_name(\%func_names, $entry->{in_addr}, 64);
         } else {
             ($name, $delta, $ptype, $poff) = decode_insn_addr($entry, $insn =~ /^lea\s/);
+            next if $ptype && $opcode && $opcode =~ /[sz]x$/ && $ptype !~ /^!/;
         }
         my $changed = 0;
         if (defined $delta && $ptype) {
@@ -811,16 +866,36 @@ for (my $i = 0; $i <= $dsize; $i++) {
         } else {
             $last_nop = 0;
             my $str = $cent->{insn};
+            my $sintarg = 0;
 
-            my ($pname, $delta, $ptype, $poff) = decode_insn_addr($cent);
-            ($ptype||'') =~ /^!BITS:(\S+)$/;
-            my $bitfield = $1;
+            if ($str =~ /,0x([0-9a-f]+)/) {
+                my $val = hex $1;
+                if ($str =~ /\s(word ptr|[abcdsd][xi])/) {
+                    $val = $val | 0xffff0000 if $val >= 0x8000;
+                }
+                if ($val >= 0x80000000) {
+                    $val = 0xffffffff - $val - 1;
+                }
+                $sintarg = $val;
+                if ($val <= 9999 && $val >= -9999 && ($val < 0 || $val > 9)) {
+                    $str = $str . " ; $val";
+                }
+            }
 
-            if ($pname) {
+            my ($pname, $delta, $ptype, $poff) = decode_insn_addr($cent, $str =~ /^lea\s/, 1);
+            my ($bitfield, $enum);
+            $bitfield = $1 if ($ptype||'') =~ /^!BITS:(\S+)$/;
+            $enum = $1 if ($ptype||'') =~ /^!ENUM:(\S+)$/;
+
+            if ($cent->{in_reg}) {
+                my ($ptype, $poff) = lookup_ptr_info($cent, $cent->{in_reg});
+                $str .= "\\l          ; --> ".concat_delta($ptype,$poff) if $ptype;
+            } elsif ($pname) {
                 $str .= "\\l          ; ".concat_delta($pname,$delta);
             } elsif ($ptype) {
                 $str .= "\\l          ; --> ".concat_delta($ptype,$poff);
             }
+
             #$str .= "\\l          ; ? $ptype" if $ptype && !$pname;
             if ($bitfield && $cent->{insn} =~ /^(test|or|and)\s.*,0x([0-9a-f]+)$/) {
                 my ($cmd,$val) = ($1, hex $2);
@@ -828,6 +903,12 @@ for (my $i = 0; $i <= $dsize; $i++) {
                 my $rbits = format_bits($bitfield, $poff, invert_bits($val));
                 $bits = '~'.$rbits if length($rbits) < length($bits);
                 $str .= "\\l          ; ".$bits if $bits;
+            }
+            if ($enum && $cent->{insn} =~ /^(mov|cmp|add|sub|lea)\s/) {
+                my ($cmd) = ($1);
+                $sintarg = 0 if $cmd =~ /add|sub|lea/;
+                my ($edelta, $ename) = lookup_name($enum_names{$enum}, $sintarg-$poff);
+                $str .= "\\l          ; ".concat_delta($ename, $edelta) if $ename;
             }
             $name .= $apfix.$str."\\l";
         }
