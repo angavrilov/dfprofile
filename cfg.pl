@@ -214,8 +214,8 @@ for my $name (glob "custom.*.struct") {
     $rhash->{0} ||=  { name => $top, type => 'compound' };
 }
 
-load_names %func_names, 'Dwarf_Fortress.func_names', %bit_names, %enum_names;
 load_csv_names %func_names, 'globals.csv', 0, %bit_names, %enum_names;
+load_names %func_names, 'Dwarf_Fortress.func_names', %bit_names, %enum_names;
 
 sub simplify_name($) {
     my ($name) = @_;
@@ -361,12 +361,12 @@ while (<D>) {
                 $entry->{in_reg} = $1;
             }
         }
-    } elsif ($insn =~ /^mov\s+dword ptr (\[esp\+0x[0-9a-f]+\]),(e[a-z][a-z])$/) {
+    } elsif ($insn =~ /^mov\s+dword ptr (\[esp(?:\+0x[0-9a-f]+)?\]),(e[a-z][a-z])$/) {
         $entry->{out_reg} = $1;
         $entry->{defs}{$1} = 1;
         $entry->{in_reg} = $2;
         $entry->{is_lea} = 0;
-    } elsif ($insn =~ /^mov\s+dword ptr (\[esp\+0x[0-9a-f]+\]),0x([0-9a-f]+)$/) {
+    } elsif ($insn =~ /^mov\s+dword ptr (\[esp(?:\+0x[0-9a-f]+)?\]),0x([0-9a-f]+)$/) {
         $entry->{out_reg} = $1;
         $entry->{defs}{$1} = 1;
         $entry->{in_addr} = hex $2;
@@ -378,13 +378,15 @@ while (<D>) {
         $entry->{ptr_offset} = $explicit_offset;
     }
 
+    $entry->{insn} = $insn;
+
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\]),/stack_to_name($1,$2).','/ie;
     $insn =~ s/(\[esp(?:\+0x([0-9a-f]+))?\])$/stack_to_name($1,$2,$entry)/ie;
 
     # always replace direct references to named functions
     $insn =~ s/0x([0-9a-f]+)/$func_names{hex $1}&&$func_names{hex $1}{is_function}?$func_names{hex $1}{name}:"0x$1"/ie;
 
-    $entry->{insn} = $insn;
+    $entry->{shown_insn} = $insn;
 
     push @disass, $entry;
     $addr_idx{$pc} = $entry;
@@ -476,7 +478,10 @@ sub find_switch_range($$) {
 for my $rjmp (@switch_jmps) {
     my ($entry, $reg, $base) = @$rjmp;
     my $pc = $entry->{pc};
-    
+
+    $entry->{switch_reg} = $reg;
+    $entry->{switch_map} = {};
+
     my $range = find_switch_range($entry, $reg);
     my $bound = $range;
     unless (defined $range) {
@@ -501,9 +506,11 @@ for my $rjmp (@switch_jmps) {
         }
     }
     for my $tgt (keys %idxset) {
-        my $ids = join ',',compact_ranges(@{$idxset{$tgt}});
+        my @ranges = compact_ranges(@{$idxset{$tgt}});
+        my $ids = join ',',@ranges;
         $next{$pc}{$tgt} = $ids;
         $prev{$tgt}{$pc} = $ids;
+        $entry->{switch_map}{$ids} = \@ranges;
     }
 }
 
@@ -727,7 +734,7 @@ while ($ptr_changed) {
         next unless $entry->{out_reg};
         next if $entry->{ptr_type};
         my $insn = $entry->{insn};
-        next unless $insn =~ /^(?:(lea|mov|call|movzx|movsx)\s|add\s+e[a-z][a-z],0x)/;
+        next unless $insn =~ /^(?:(lea|mov|call|movzx|movsx)\s|(add|sub|or|and)\s+e[a-z][a-z],0x)/;
         my $opcode = $1;
         my ($name, $delta, $ptype, $poff);
         if ($entry->{in_reg}) {
@@ -865,7 +872,7 @@ for (my $i = 0; $i <= $dsize; $i++) {
             $last_nop = 1;
         } else {
             $last_nop = 0;
-            my $str = $cent->{insn};
+            my $str = $cent->{shown_insn};
             my $sintarg = 0;
 
             if ($str =~ /,0x([0-9a-f]+)/) {
@@ -890,6 +897,8 @@ for (my $i = 0; $i <= $dsize; $i++) {
             if ($cent->{in_reg}) {
                 my ($ptype, $poff) = lookup_ptr_info($cent, $cent->{in_reg});
                 $str .= "\\l          ; --> ".concat_delta($ptype,$poff) if $ptype;
+            } elsif ($cent->{out_reg} && $cent->{insn} =~ /^(cmp|test)/ && $ptype) {
+                $str .= "\\l          ; --> ".concat_delta($ptype,$poff);
             } elsif ($pname) {
                 $str .= "\\l          ; ".concat_delta($pname,$delta);
             } elsif ($ptype) {
@@ -937,6 +946,17 @@ for (my $i = 0; $i <= $dsize; $i++) {
         unless $cent->{stop} || $i >= $dsize;
 
     if (my $ntbl = $next{$cent->{pc}}) {
+        my ($switch_enum, $switch_bias);
+
+        if ($cent->{switch_reg}) {
+            my ($switch_type, $switch_off) = lookup_ptr_info($cent, $cent->{switch_reg});
+
+            if ($switch_type && $switch_type =~ /^!ENUM:(\S+)$/) {
+                $switch_enum = $enum_names{$1};
+                $switch_bias = $switch_off;
+            }
+        }
+
         for my $ntgt (keys %$ntbl) {
             my $tgtname = sprintf('%x',$ntgt);
 
@@ -947,6 +967,20 @@ for (my $i = 0; $i <= $dsize; $i++) {
             }
 
             if (length $tag) {
+                if ($switch_enum && $cent->{switch_map}{$tag}) {
+                    for my $item (@{$cent->{switch_map}{$tag}}) {
+                        $item =~ /^(\d+)(?:-(\d+))?$/ or next;
+                        my ($sv, $ev) = ($1, $2);
+                        my ($sdelta, $sname, $edelta, $ename);
+                        ($sdelta, $sname) = lookup_name($switch_enum, $sv-$switch_bias) if defined $sv;
+                        ($edelta, $ename) = lookup_name($switch_enum, $ev-$switch_bias) if defined $ev;
+                        if ($sname || $ename) {
+                            $tag .= "\\l".($sname ? concat_delta($sname,$sdelta) : $sv);
+                            $tag .= "-".($ename ? concat_delta($ename,$edelta) : $ev) if defined $ev;
+                        }
+                    }
+                }
+
                 printf O "n%x -> n%s [label=\"%s\" style=bold];\n", $entry->{pc}, $tgtname, $tag;
             } else {
                 printf O "n%x -> n%s;\n", $entry->{pc}, $tgtname;
