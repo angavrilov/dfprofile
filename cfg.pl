@@ -51,16 +51,16 @@ sub compact_ranges(@) {
     return @items;
 }
 
-sub load_names(\%$;\%\%) {
-    my ($rhash, $fname, $bitfields, $enums) = @_;
+sub load_names(\%$;\%\%$) {
+    my ($rhash, $fname, $bitfields, $enums, $no_hex) = @_;
     
     if (open N, $fname) {
         while (<N>) {
             last if /^===/;
             next unless /^([0-9a-f]+)(?:\+([0-9a-f]+))?\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$/;
             my ($addr, $addrx, $name, $type, $offset) = ($1,$2,$3,$4,$5);
-            my $aval = hex $addr;
-            $aval += hex $addrx if $addrx;
+            my $aval = $no_hex ? int $addr : hex $addr;
+            $aval += ($no_hex ? int $addrx : hex $addrx) if $addrx;
 
             $rhash->{$aval}{name} = $name;
             $rhash->{$aval}{type} ||= ($type || '');
@@ -105,7 +105,7 @@ sub load_enums(\%$) {
             my ($top, $level, $type, $name, $target) = ($1,$2,$3,$4,$5);
             if ($level == 0 && $type eq 'enum-type') {
                 $ihash->{$top} ||= {};
-            } elsif ($level == 1 && $ihash->{$top} && $target) {
+            } elsif ($level == 1 && $ihash->{$top} && $target ne '') {
                 $ihash->{$top}{$target} = { name => $name };
             }
         }
@@ -203,6 +203,16 @@ my %enum_names;
 
 load_bitfields %bit_names, 'all.csv';
 load_enums %enum_names, 'all.csv';
+
+for my $name (glob "custom.*.enum") {
+    $name =~ /^custom\.(.+)\.enum$/ or next;
+    my $top = $1;
+
+    my $rhash = ($enum_names{$top} ||= {});
+    load_names %$rhash, $name, %bit_names, %enum_names, 1;
+    $rhash->{0} ||=  { name => $top, type => 'enum-type' };
+}
+
 load_csv_names %all_types, 'all.csv', 1, %bit_names, %enum_names;
 
 for my $name (glob "custom.*.struct") {
@@ -210,7 +220,7 @@ for my $name (glob "custom.*.struct") {
     my $top = $1;
 
     my $rhash = ($all_types{$top} ||= {});
-    load_names %$rhash, $name, %bit_names;
+    load_names %$rhash, $name, %bit_names, %enum_names;
     $rhash->{0} ||=  { name => $top, type => 'compound' };
 }
 
@@ -953,7 +963,7 @@ for (my $i = 0; $i <= $dsize; $i++) {
 
             if ($switch_type && $switch_type =~ /^!ENUM:(\S+)$/) {
                 $switch_enum = $enum_names{$1};
-                $switch_bias = $switch_off;
+                $switch_bias = $switch_off || 0;
             }
         }
 
