@@ -423,6 +423,8 @@ for my $entry (@disass) {
     local $_ = $entry->{insn};
     if ($_ eq 'ret') {
         $entry->{stop} = 1;
+    } elsif ($entry->{shown_insn} =~ /^call\s+_Unwind_Resume/) {
+        $entry->{stop} = 1;
     } elsif (/^jmp\s+([0-9a-f]+)$/) {
         my $tgt = hex $1;
         $entry->{stop} = 1;
