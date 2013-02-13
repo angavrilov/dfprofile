@@ -930,6 +930,9 @@ for (my $i = 0; $i <= $dsize; $i++) {
                 $sintarg = 0 if $cmd =~ /add|sub|lea/;
                 my ($edelta, $ename) = lookup_name($enum_names{$enum}, $sintarg-$poff);
                 $str .= "\\l          ; ".concat_delta($ename, $edelta) if $ename;
+            } elsif ($sintarg && $sintarg > 0x10000 && $cent->{insn} =~ /^(cmp|add|sub)\s|\[/) {
+                my ($adelta, $aname) = lookup_name(\%func_names, $sintarg, 64);
+                $str .= "\\l          ; ".concat_delta($aname, $adelta) if $aname;
             }
             $name .= $apfix.$str."\\l";
         }
