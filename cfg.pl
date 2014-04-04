@@ -313,6 +313,11 @@ $rstart or die "Could not find function\n";
 
 my $sname = sprintf("func-%x", $rstart);
 
+my ($delta, $name) = lookup_name \%func_names, $rstart, 1;
+my $func_name = ($name ? concat_delta($name,$delta) : sprintf('%x',$rstart));
+
+print "Function $func_name\n";
+
 load_names %stack_names, "$sname.stack", %bit_names, %enum_names;
 
 for (my $i = 0; $i <= 5; $i++) {
@@ -685,6 +690,8 @@ sub decode_insn_addr($;$$) {
             $offset += $ptr_offset;
 
             if ($ptr_type) {
+                my $tinfo = $all_types{$ptr_type};
+
                 if ($ptr_type =~ /^(.*)\*$/) {
                     $delta = 0;
                     $pdelta = $offset;
@@ -700,7 +707,7 @@ sub decode_insn_addr($;$$) {
                     $delta = $offset;
                     $type = $ptr_type;
                     $ptype = $ptr_type;
-                } else {
+                } elsif ($tinfo) {
                     my $tinfo = $all_types{$ptr_type} or return undef;
 
                     ($delta, $name, $type, $ptype) = lookup_name($tinfo, $offset);
@@ -711,6 +718,8 @@ sub decode_insn_addr($;$$) {
                         $type = $ptr_type;
                         $pdelta = $offset - $delta;
                     }
+                } else {
+                    ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $offset, 64);
                 }
             } else {
                 ($delta, $name, $type, $ptype) = lookup_name(\%func_names, $offset, 64);
@@ -776,10 +785,6 @@ while ($ptr_changed) {
 
 open O, ">$sname.dot";
 
-my ($delta, $name) = lookup_name \%func_names, $rstart, 1;
-my $func_name = ($name ? concat_delta($name,$delta) : sprintf('%x',$rstart));
-
-print "Function $func_name\n";
 
 printf O "digraph \"%s\" {\n", $func_name;
 printf O "node [fontname=\"serif\" fontsize=8];\n";
