@@ -956,9 +956,9 @@ for (my $i = 0; $i <= $dsize; $i++) {
     }
 
     $name = replace_code_patterns($name);
-    if ($name =~ /string/) {
+    #if ($name =~ /string/) {
         $name =~ s/0x([0-9a-f]+)/add_string($1)/ge;
-    }
+    #}
 
     $cnt++;
     printf O "n%x [label=\"%s\" shape=box%s];\n", $entry->{pc}, $name, $opts;
