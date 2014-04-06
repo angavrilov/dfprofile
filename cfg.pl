@@ -871,6 +871,11 @@ sub invert_bits($) {
 for (my $i = 0; $i <= $dsize; $i++) {
     my $entry = $disass[$i];
     my $name = sprintf("<%x>\\n", $entry->{pc});
+
+    if ($stack_names{$entry->{pc}} && $stack_names{$entry->{pc}}{name} ne 'retval:') {
+        $name .= $stack_names{$entry->{pc}}{name}.":\\n";
+    }
+
     my $opts = '';
     my $last_nop = 0;
     my $start_pc = $entry->{pc};
