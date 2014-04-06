@@ -1041,5 +1041,9 @@ if ($fail) {
 }
 
 system "run konqueror ./$sname.svg";
+sleep 2;
 system "./run-kwrite.sh Dwarf_Fortress.func_names";
 system "./run-kwrite.sh $sname.stack";
+for my $fname (glob "$sname*.txt") {
+    system "./run-kwrite.sh $fname";
+}
