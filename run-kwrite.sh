@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CMDLINE="kwrite $1"
+CMDLINE="kwrite --caption CFG --geometry 500x300 $1"
 
 PLIST=`ps -Alf`
 
